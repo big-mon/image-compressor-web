@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">image-compressor-web</title>
+  <rect width="64" height="64" rx="14" fill="#17324d" />
+  <path fill="#f5b544" d="M17 20h20a5 5 0 0 1 5 5v19H22a5 5 0 0 1-5-5V20Z" />
+  <path fill="#fff" d="M25 15h20a5 5 0 0 1 5 5v19a5 5 0 0 1-5 5H25a5 5 0 0 1-5-5V20a5 5 0 0 1 5-5Zm0 5a0 0 0 0 0 0 0v19h20V20H25Z" />
+  <circle cx="30" cy="27" r="3" fill="#17324d" />
+  <path fill="#17324d" d="m25 39 6-7 5 5 3-3 6 5H25Z" />
+</svg>
