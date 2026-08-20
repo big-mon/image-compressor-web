@@ -2,42 +2,18 @@
 
 ブラウザ内で画像をトリミング・圧縮する、独立した静的 React + TypeScript + Vite アプリです。
 
-## 前提環境
-
-- Node.js `>=22.13`
-- pnpm `11.22.0`
-
-## 開発コマンド
+## Quick Start
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm run dev
-pnpm test
-pnpm run lint
-pnpm run typecheck
-pnpm run build
 ```
 
-Hub のサブパスで配信する場合は、ビルド時に `BASE_PATH` を渡します。
+## 開発者向けドキュメント
 
-```sh
-BASE_PATH=/image-compressor-web/ pnpm run build
-```
-
-## Chromium E2E
-
-実ブラウザ受け入れテストは、依存関係を追加せず Chrome DevTools Protocol で実行します。次のChrome実行ファイルが必要です。
-
-`/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`（Chrome 151で確認済み）
-
-本番ビルドを作成してから、ループバック上の `/image-compressor-web/` で実行してください。
-
-```sh
-BASE_PATH=/image-compressor-web/ pnpm run build
-BASE_PATH=/image-compressor-web/ pnpm run test:e2e
-```
-
-テストは一時Chromeプロファイル・ダウンロード先・JPEG fixtureを作成し、終了時に削除します。Chromium以外（Safari／Firefox）の互換性はこのテストの対象外で、別途手動確認が必要です。
+- 変更の入口、不変条件、最低限の検証、完了判定: [AGENTS.md](AGENTS.md)
+- architecture、画像変換、Worker、metadata、privacy boundary: [docs/architecture.md](docs/architecture.md)
+- setup、script の使い分け、BASE_PATH、Chromium E2E、completion gate: [docs/development.md](docs/development.md)
 
 ## プライバシーとスコープ
 
