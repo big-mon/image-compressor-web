@@ -20,7 +20,7 @@ File/drop
   → App の object URL、metrics、download
 ```
 
-`App` は編集変更から 160 ms 後に最大 960 px の preview を要求し、download では full output size を要求する。preview の縮小は geometry の crop/transform semantics を変えず、render dimensions だけを制限する。
+`App` は編集変更後に debounce された reduced-resolution の preview を要求し、download では full output size を要求する。両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
 
 ## Module contracts and seams
 
@@ -103,4 +103,4 @@ Chromium E2E は CDP の HTTP/WebSocket 観測と static-server request log を�
 | `scripts/e2e-jpeg.test.mjs` / `e2e-network.test.mjs` | metadata fixture と local static/network assertion の helper contract |
 | `pnpm run test:e2e` | built app を実 Chrome で BASE_PATH 配下に開き、EXIF orientation、実 Worker preview、rotate/flip/crop/resize pixels、download dimensions、JPEG metadata-free output、browser diagnostics、local-only network を確認 |
 
-Chromium が v1 の automated acceptance browser である。Safari / Firefox の compatibility claim はこの repository の自動化からは導かない。
+Browser coverage と E2E の実行範囲は [development.md](development.md) が所有する。

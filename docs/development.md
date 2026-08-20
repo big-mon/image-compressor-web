@@ -14,7 +14,7 @@ Dependency setup (when needed):
 pnpm install --frozen-lockfile
 ```
 
-これは lockfile を変更せずに install する。toolchain/lockfile の変更、release candidate、または環境差を疑う場合は、別 repo の `node_modules` を link せず、clean state からこの command を通す。npm、yarn、package-lock はこの repo の install authority ではない。
+これは lockfile を変更せずに install する。toolchain/lockfile の変更、または環境差を疑う場合は、isolated clean checkout/store を使い、別 repo の `node_modules` を link せずにこの command を通す。npm、yarn、package-lock はこの repo の install authority ではない。
 
 Local development:
 
@@ -55,35 +55,11 @@ pnpm test --reporter=verbose src/image/geometry.test.ts
 
 `pnpm test -- src/image/geometry.test.ts` はこの repo の pnpm/Vitest 組み合わせでは `vitest run -- src/...` となり、focused selector ではなく全 test file を実行する。対象 file の選択確認を省略しない。
 
-変更に対応する module contract と evidence は [architecture.md](architecture.md) を参照し、minimum gate の選択は [AGENTS.md](../AGENTS.md) の verification matrix に従う。shared seam を触ったら focused pass だけで終わらず `pnpm test` を追加する。
+変更に対応する module contract と evidence は [architecture.md](architecture.md) を参照し、minimum gate の選択は [AGENTS.md](../AGENTS.md) の verification matrix に従う。focused test の selector と forwarding の確認はこの節の手順に従う。
 
-## Verification profiles
+## Selecting verification
 
-### Pure logic
-
-geometry、stage、intent、raster-utils、protocol、scheduler、encoded byte parser の変更は、まず focused test、次に `pnpm test`、`pnpm run typecheck`、`pnpm run lint` を実行する。Canvas/Worker/URL の実装を含まないことが条件である。
-
-### UI / Worker / privacy / container
-
-App の async adoption、decode、Worker protocol/scheduler、Canvas transform、encode、metadata、CSP、network scope の変更は、`pnpm test`、`pnpm run typecheck`、`pnpm run lint`、BASE_PATH build、Chromium E2E を最低 gate とする。unit が pass しても、実ブラウザでの boundary evidence を省略しない。
-
-### Toolchain / lockfile
-
-package.json、pnpm-lock.yaml、Vite、Vitest、ESLint、E2E harness、build output の変更は、clean state で次をすべて通す。
-
-```sh
-pnpm install --frozen-lockfile
-pnpm test
-pnpm run lint
-pnpm run typecheck
-pnpm run build
-BASE_PATH=/image-compressor-web/ pnpm run build
-BASE_PATH=/image-compressor-web/ pnpm run test:e2e
-```
-
-### Release candidate
-
-Toolchain profile に加え、意図した focused test、`git diff --check`、relative-link/stale-claim check、ignored/generated artifact の staged check を行う。外部 release/deploy mutation は maintainer の明示承認が出るまで行わない。
+変更 class に必要な gate は [AGENTS.md](../AGENTS.md) の `Change → minimum verification` matrix から選ぶ。この文書が所有するのは、focused test の選択確認、clean/frozen setup、`BASE_PATH` build、Chromium E2E の実行方法だけである。clean-state が必要な場合は、isolated clean checkout/store で `pnpm install --frozen-lockfile` を実行する。matrix の full command set はここに重複させない。
 
 ## BASE_PATH and Chromium E2E
 
@@ -116,8 +92,10 @@ CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" BASE_
 - **loopback server が EPERM:** 実ブラウザ E2E を実行できる host environment から `pnpm run test:e2e` を実行する。mock server、mock Worker、unit-only の置換では network/static/Worker acceptance を証明できない。
 - **pnpm executable warning:** pnpm 実行時に環境の mise が `MODULE_TYPELESS` 系 warning を出しても、command の exit code と project の test/build result を基準にする。warning を理由に package/config を変更しない。
 
-## Current automation truth and completion
+## Current automation truth
 
-この repo には GitHub Actions がない。CI が追加されるまで、上記 local full gate と実行結果が authoritative であり、CI coverage は記載しない。
+この repo には GitHub Actions がない。CI が追加されるまで、AGENTS.md の verification matrix に従う local gate と実行結果が authoritative であり、CI coverage は記載しない。
 
-完了時は [AGENTS.md](../AGENTS.md) の completion checklist に戻り、change class に必要な focused/full tests、typecheck、lint、BASE_PATH build、Chromium E2E、`git diff --check`、staged artifact check、contract 文書更新を確認する。不変条件をこの文書へ複製して更新しない。
+## Completion
+
+完了時は [AGENTS.md](../AGENTS.md) の completion checklist に戻る。

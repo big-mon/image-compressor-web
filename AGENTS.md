@@ -36,7 +36,7 @@
 | pure helper（geometry、stage、intent、options、protocol、scheduler） | `pnpm test <focused-test-file>` で選択を確認、`pnpm test`、`pnpm run typecheck`、`pnpm run lint`（該当するもの） |
 | UI、Worker、container、metadata、privacy、decode/encode の境界 | `pnpm test`、`pnpm run typecheck`、`pnpm run lint`、`BASE_PATH=/image-compressor-web/ pnpm run build`、`BASE_PATH=/image-compressor-web/ pnpm run test:e2e` |
 | toolchain、package.json、lockfile、Vite/E2E harness | `pnpm install --frozen-lockfile` を clean state で実行し、full unit・lint・typecheck・BASE_PATH build・Chromium E2E を通す |
-| docs-only（契約を変えない） | relative-link/stale-claim check と `git diff --check`。契約・product claim を変えたら上の該当 gate を追加 |
+| docs-only（契約を変えない） | 変更した相対 Markdown link がすべて解決し、変更した事実主張を owner の code/config/package/tests と照合し、`git diff --check` が pass。契約・product/privacy claim を変更した場合は、その境界に対応する上の matrix gate を追加 |
 
 ## 完了の判定
 
