@@ -78,7 +78,11 @@ worker は `convertToBlob` の MIME を要求値と照合し、bytes を `stripE
 
 ## Privacy, network, and CSP boundary
 
-`index.html` の CSP は `connect-src 'self'`、`script-src 'self'`、`font-src 'self'`、`worker-src 'self' blob:` などを指定する。アプリ本体に upload endpoint、backend、analytics、telemetry、外部 runtime asset、外部 font の runtime call はない。Worker asset は同じ build の static asset として読み込まれる。
+`index.html` の CSP は、アプリの same-origin runtime を基本に、Cloudflare Pages の managed Web Analytics injection のため `script-src 'self' https://static.cloudflareinsights.com` を許可する。`connect-src 'self'`、`font-src 'self'`、`worker-src 'self' blob:` などは維持する。Worker asset は同じ build の static asset として読み込まれる。
+
+**App runtime / local E2E:** アプリは画像をブラウザ内で処理し、upload endpoint、backend、アプリ独自の analytics/telemetry、外部 font を持たない。Vite の build/static server は Cloudflare Pages の managed injection を行わないため、local production build の HTML には beacon script が注入されず、Chromium E2E の authority は built static surface、local origin、read-only HTTP、POST zero、third-party zero のままである。`scripts/e2e-network.mjs` はこの境界を緩めず、analytics path も拒否する。
+
+**Production hosting:** Cloudflare Pages は `https://static.cloudflareinsights.com/beacon.min.js` を managed script として注入し、同一 origin の `/cdn-cgi/rum` へ reporting する。本番の許可範囲は page/access/performance metrics（page views/visits、host/path/referrer、country、device/browser/OS、navigation type、page-load timing/Core Web Vitals）に限り、選択画像由来の file name、MIME、metadata、content、pixels、bytes や custom event は送信しない。`connect-src` に Cloudflare origin を追加しないのは、reporting が same-origin だからである。Rocket Loader は hosting-managed optimization のままとし、source では opt out しない。
 
 Chromium E2E は CDP の HTTP/WebSocket 観測と static-server request log を突き合わせる。許可されるのは BASE_PATH 下の built HTML/asset/favicon の read-only request だけで、third-party origin、WebSocket、POST、upload/telemetry/analytics path、failed/non-200 request は失敗とする。CSP や network harness を緩めて機能を通してはならない。
 
