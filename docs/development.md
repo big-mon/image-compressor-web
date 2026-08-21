@@ -22,7 +22,7 @@ Local development:
 pnpm run dev
 ```
 
-Vite の dev server で UI を開く。product/privacy/scope の quick start は [README.md](../README.md)、実際の変換境界は [architecture.md](architecture.md) を参照する。
+Vite の dev server で UI を開く。[README.md](../README.md) は product/scope の quick start、[docs/privacy.md](privacy.md) は user-facing privacy policy、[architecture.md](architecture.md) は technical transform/privacy boundary を所有する。
 
 ## Scripts by intent
 
@@ -85,6 +85,10 @@ CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" BASE_
 ```
 
 この acceptance harness は Chrome v1 の証拠であり、Safari/Firefox の互換性を保証しない。
+
+## Public metadata and discovery
+
+`index.html` が公開ページの title、description、absolute canonical を所有する。root の `robots.txt` と sitemap は App Hub が所有し、この subpath では追加しない。SEO は user-first とし、[title links](https://developers.google.com/search/docs/appearance/title-link)、[snippets](https://developers.google.com/search/docs/appearance/snippet)、[canonicalization](https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls)、[spam policies](https://developers.google.com/search/docs/essentials/spam-policies) に従う。hidden text/links、keyword stuffing、doorway variants、推測的な rich-result markup は追加しない。
 
 ## Troubleshooting
 

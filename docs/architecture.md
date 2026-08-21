@@ -78,6 +78,8 @@ worker は `convertToBlob` の MIME を要求値と照合し、bytes を `stripE
 
 ## Privacy, network, and CSP boundary
 
+ユーザー向けプライバシーポリシーの本文は [docs/privacy.md](privacy.md) が所有する。ここでは実装境界、CSP、network contract、runtime/test evidence を扱う。
+
 `index.html` の CSP は、アプリの same-origin runtime を基本に、Cloudflare Pages の managed Web Analytics injection のため `script-src 'self' https://static.cloudflareinsights.com` を許可する。`connect-src 'self'`、`font-src 'self'`、`worker-src 'self' blob:` などは維持する。Worker asset は同じ build の static asset として読み込まれる。
 
 **App runtime / local E2E:** アプリは画像をブラウザ内で処理し、upload endpoint、backend、アプリ独自の analytics/telemetry、外部 font を持たない。Vite の build/static server は Cloudflare Pages の managed injection を行わないため、local production build の HTML には beacon script が注入されず、Chromium E2E の authority は built static surface、local origin、read-only HTTP、POST zero、third-party zero のままである。`scripts/e2e-network.mjs` はこの境界を緩めず、analytics path も拒否する。
