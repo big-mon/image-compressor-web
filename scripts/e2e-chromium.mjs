@@ -545,9 +545,9 @@ async function assertPublicMetadataAndFooter(cdp, sessionId) {
       canonicalCount: canonicalLinks.length,
       description: descriptionMetas[0]?.getAttribute('content') ?? '',
       descriptionCount: descriptionMetas.length,
-      externalAnchors: [...document.querySelectorAll('a[href]')]
+      externalAnchorCount: [...document.querySelectorAll('a[href]')]
         .filter((anchor) => /^https?:/i.test(anchor.href))
-        .map(serializeAnchor),
+        .length,
       footerLinks: [...footerNavigation].flatMap((navigation) => [...navigation.querySelectorAll('a[href]')].map(serializeAnchor)),
       footerNavigationCount: footerNavigation.length,
       h1s: [...document.querySelectorAll('h1')].map((heading) => heading.textContent?.trim() ?? ''),
@@ -561,6 +561,7 @@ async function assertPublicMetadataAndFooter(cdp, sessionId) {
   assert(pageContract.h1s.length === 1 && pageContract.h1s[0] === EXPECTED_H1, `Expected exactly one H1 with the current visible text: ${JSON.stringify(pageContract.h1s)}`)
   assert(pageContract.footerNavigationCount === 1, `Expected one external-link footer navigation: ${pageContract.footerNavigationCount}`)
   assert(pageContract.footerLinks.length === EXPECTED_EXTERNAL_LINKS.length, `Unexpected footer link count: ${JSON.stringify(pageContract.footerLinks)}`)
+  assert(pageContract.externalAnchorCount === pageContract.footerLinks.length, `Expected every absolute external anchor to be in the footer link collection: ${JSON.stringify(pageContract)}`)
 
   for (const expectedLink of EXPECTED_EXTERNAL_LINKS) {
     const link = pageContract.footerLinks.find((candidate) => candidate.href === expectedLink.href)
@@ -569,12 +570,6 @@ async function assertPublicMetadataAndFooter(cdp, sessionId) {
     assert(link.target === '_blank', `Footer link must use target=_blank: ${JSON.stringify(link)}`)
     const relTokens = new Set(link.rel.toLowerCase().split(/\s+/).filter(Boolean))
     assert(relTokens.has('noopener') && relTokens.has('noreferrer'), `Footer link is missing safe rel tokens: ${JSON.stringify(link)}`)
-  }
-
-  for (const externalAnchor of pageContract.externalAnchors) {
-    assert(externalAnchor.target === '_blank', `External anchor must use target=_blank: ${JSON.stringify(externalAnchor)}`)
-    const relTokens = new Set(externalAnchor.rel.toLowerCase().split(/\s+/).filter(Boolean))
-    assert(relTokens.has('noopener') && relTokens.has('noreferrer'), `External anchor is missing safe rel tokens: ${JSON.stringify(externalAnchor)}`)
   }
 }
 
