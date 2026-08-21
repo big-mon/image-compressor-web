@@ -24,10 +24,8 @@ Web Analytics の beacon は管理対象スクリプト [`https://static.cloudfl
 
 フッターには X と GitHub へのリンクがあります。リンク先へ移動した後は、各提供者の利用規約・プライバシーポリシーが適用されます。
 
-フッターの外部リンクは、source で `target="_blank"` と `rel="noopener noreferrer"` を指定しています。これは opener と referrer の挙動に関する設定であり、リンク先のデータ取扱いを保証するものではありません。
-
 ## 変更・問い合わせ
 
-記載内容は現行の実装と配信設定に基づきます。重要なプライバシー変更がある場合は、この文書と対応する技術契約・実装・テスト・本番観測の証拠を更新します。
+このポリシーは、現在の実装とホスティング環境を反映しており、重要なプライバシー変更がある場合に更新します。
 
 問い合わせの連絡先として [GitHub Issues](https://github.com/big-mon/image-compressor-web/issues) を利用できます。
