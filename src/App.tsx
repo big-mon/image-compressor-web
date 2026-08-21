@@ -606,44 +606,45 @@ function App() {
   const cropSurfaceStyle = geometry ? createCropSurfaceStyle(geometry.displaySize) : undefined
 
   return (
-    <main className="shell">
-      <header className="hero">
-        <p className="eyebrow">image-compressor-web</p>
-        <h1>画像を、ブラウザの中だけで整える。</h1>
-        <p className="lead">
-          選んだ画像をここでトリミング、回転、反転、リサイズして、必要な形式で保存できます。画像データは外部へ送信しません。
-        </p>
-      </header>
+    <>
+      <main className="shell">
+        <header className="hero">
+          <p className="eyebrow">image-compressor-web</p>
+          <h1>画像を、ブラウザの中だけで整える。</h1>
+          <p className="lead">
+            選んだ画像をここでトリミング、回転、反転、リサイズして、必要な形式で保存できます。画像データは外部へ送信しません。
+          </p>
+        </header>
 
-      <section className="privacy-card" aria-label="プライバシー情報">
-        <span className="privacy-icon" aria-hidden="true">◎</span>
-        <p>
-          すべての処理はこのブラウザ内で完結します。ピクセルにデコードしてから再エンコードするため、出力画像のメタデータは削除されます。JPEGの回転もロスレス変換ではなく再エンコードです。
-        </p>
-      </section>
+        <section className="privacy-card" aria-label="プライバシー情報">
+          <span className="privacy-icon" aria-hidden="true">◎</span>
+          <p>
+            すべての処理はこのブラウザ内で完結します。ピクセルにデコードしてから再エンコードするため、出力画像のメタデータは削除されます。JPEGの回転もロスレス変換ではなく再エンコードです。
+          </p>
+        </section>
 
-      <label
-        className={`drop-zone${dragging ? ' is-dragging' : ''}`}
-        onDragOver={(event) => {
-          event.preventDefault()
-          setDragging(true)
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={handleDrop}
-      >
-        <input
-          className="visually-hidden"
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          onChange={handleInputChange}
-        />
-        <span className="drop-title">JPEG・PNG・WebPを選ぶ</span>
-        <span className="drop-detail">クリックまたはドラッグ＆ドロップ。静止画のみ対応。</span>
-      </label>
+        <label
+          className={`drop-zone${dragging ? ' is-dragging' : ''}`}
+          onDragOver={(event) => {
+            event.preventDefault()
+            setDragging(true)
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={handleDrop}
+        >
+          <input
+            className="visually-hidden"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleInputChange}
+          />
+          <span className="drop-title">JPEG・PNG・WebPを選ぶ</span>
+          <span className="drop-detail">クリックまたはドラッグ＆ドロップ。静止画のみ対応。</span>
+        </label>
 
-      {asset && editState && geometry ? (
-        <>
-          <section className="workspace" aria-label="画像エディター">
+        {asset && editState && geometry ? (
+          <>
+            <section className="workspace" aria-label="画像エディター">
             <div className="editor-column">
               <div className="section-heading">
                 <div>
@@ -788,9 +789,9 @@ function App() {
               </button>
               <p className="download-hint">ファイル名は安全な形に整えて保存します。</p>
             </aside>
-          </section>
+            </section>
 
-          <section className="comparison-section" aria-labelledby="comparison-title">
+            <section className="comparison-section" aria-labelledby="comparison-title">
             <div className="section-heading">
               <div>
                 <p className="section-kicker">COMPARE</p>
@@ -810,32 +811,30 @@ function App() {
                 </div>
               </figure>
             </div>
+            </section>
+          </>
+        ) : (
+          <section className="empty-state" aria-label="画像未選択">
+            <p className="empty-number">01</p>
+            <h2>まず画像を選択してください。</h2>
+            <p>選択後すぐに、切り抜き範囲・ズーム・回転・出力形式を操作できます。</p>
           </section>
-        </>
-      ) : (
-        <section className="empty-state" aria-label="画像未選択">
-          <p className="empty-number">01</p>
-          <h2>まず画像を選択してください。</h2>
-          <p>選択後すぐに、切り抜き範囲・ズーム・回転・出力形式を操作できます。</p>
-        </section>
-      )}
+        )}
 
-      {errorMessage ? <p className="error-message" role="alert">{errorMessage}</p> : null}
+        {errorMessage ? <p className="error-message" role="alert">{errorMessage}</p> : null}
+      </main>
 
-      <footer className="footer-note">
-        <div className="footer-facts">
-          <span>ローカル処理</span>
-          <span aria-hidden="true">·</span>
-          <span>メタデータ削除</span>
-          <span aria-hidden="true">·</span>
-          <span>JPEG / PNG / WebP</span>
+      <footer className="site-footer">
+        <div className="footer-inner">
+          <nav className="footer-links" aria-label="フッターナビゲーション">
+            <a href="/">App Hubへ戻る</a>
+            <a href="https://x.com/big_mon" target="_blank" rel="noopener noreferrer">X @big_mon</a>
+            <a href="https://github.com/big-mon/image-compressor-web" target="_blank" rel="noopener noreferrer">GitHub</a>
+          </nav>
+          <span>© 2026 image-compressor-web</span>
         </div>
-        <nav className="footer-links" aria-label="外部リンク">
-          <a href="https://x.com/big_mon" target="_blank" rel="noopener noreferrer">X @big_mon</a>
-          <a href="https://github.com/big-mon/image-compressor-web" target="_blank" rel="noopener noreferrer">GitHub ソースコード</a>
-        </nav>
       </footer>
-    </main>
+    </>
   )
 }
 

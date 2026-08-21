@@ -26,10 +26,12 @@ const EXPECTED_TITLE = '画像圧縮・トリミングをブラウザで | image
 const EXPECTED_DESCRIPTION = 'JPEG・PNG・WebPをブラウザ内でトリミング、回転、反転、リサイズ、圧縮。画像を外部へアップロードせず、メタデータを削除して保存できます。'
 const EXPECTED_CANONICAL = 'https://app.damonge.com/image-compressor-web/'
 const EXPECTED_H1 = '画像を、ブラウザの中だけで整える。'
-const EXPECTED_EXTERNAL_LINKS = [
-  { href: 'https://x.com/big_mon', text: 'X @big_mon' },
-  { href: 'https://github.com/big-mon/image-compressor-web', text: 'GitHub ソースコード' },
+const EXPECTED_FOOTER_LINKS = [
+  { rawHref: '/', text: 'App Hubへ戻る', external: false },
+  { rawHref: 'https://x.com/big_mon', text: 'X @big_mon', external: true },
+  { rawHref: 'https://github.com/big-mon/image-compressor-web', text: 'GitHub', external: true },
 ]
+const EXPECTED_FOOTER_COPYRIGHT = '© 2026 image-compressor-web'
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -532,25 +534,38 @@ async function waitForFileLoad(cdp, sessionId) {
 async function assertPublicMetadataAndFooter(cdp, sessionId) {
   const pageContract = await evaluate(cdp, sessionId, `(() => {
     const serializeAnchor = (anchor) => ({
-      href: anchor.href,
+      rawHref: anchor.getAttribute('href') ?? '',
+      resolvedHref: anchor.href,
       rel: anchor.getAttribute('rel') ?? '',
       target: anchor.getAttribute('target') ?? '',
       text: anchor.textContent?.trim() ?? '',
     })
     const canonicalLinks = document.querySelectorAll('link[rel="canonical"]')
     const descriptionMetas = document.querySelectorAll('meta[name="description"]')
-    const footerNavigation = document.querySelectorAll('footer nav[aria-label="外部リンク"]')
+    const footerNodes = document.querySelectorAll('footer.site-footer')
+    const footer = footerNodes[0]
+    const footerNavigation = document.querySelectorAll('footer.site-footer nav.footer-links[aria-label="フッターナビゲーション"]')
+    const footerInner = footer?.querySelector(':scope > .footer-inner')
+    const footerAnchors = [...footerNavigation].flatMap((navigation) => [...navigation.querySelectorAll('a[href]')])
+    const externalAnchors = [...document.querySelectorAll('a[href]')]
+      .filter((anchor) => /^https?:/i.test(anchor.getAttribute('href') ?? ''))
     return {
       canonical: canonicalLinks[0]?.getAttribute('href') ?? '',
       canonicalCount: canonicalLinks.length,
       description: descriptionMetas[0]?.getAttribute('content') ?? '',
       descriptionCount: descriptionMetas.length,
-      externalAnchorCount: [...document.querySelectorAll('a[href]')]
-        .filter((anchor) => /^https?:/i.test(anchor.href))
-        .length,
-      footerLinks: [...footerNavigation].flatMap((navigation) => [...navigation.querySelectorAll('a[href]')].map(serializeAnchor)),
+      externalAnchorCount: externalAnchors.length,
+      externalAnchorOutsideFooterCount: externalAnchors.filter((anchor) => !footer?.contains(anchor)).length,
+      footerCopyright: footerInner?.querySelector(':scope > span')?.textContent?.trim() ?? '',
+      footerCopyrightCount: footerInner?.querySelectorAll(':scope > span').length ?? 0,
+      footerInnerCount: footer?.querySelectorAll(':scope > .footer-inner').length ?? 0,
+      footerLinks: footerAnchors.map(serializeAnchor),
+      footerOutsideMain: footer ? !footer.closest('main') : false,
+      footerCount: footerNodes.length,
       footerNavigationCount: footerNavigation.length,
+      footerExternalAnchorCount: footerAnchors.filter((anchor) => /^https?:/i.test(anchor.getAttribute('href') ?? '')).length,
       h1s: [...document.querySelectorAll('h1')].map((heading) => heading.textContent?.trim() ?? ''),
+      origin: location.origin,
       title: document.title,
     }
   })()`)
@@ -559,18 +574,31 @@ async function assertPublicMetadataAndFooter(cdp, sessionId) {
   assert(pageContract.canonicalCount === 1 && pageContract.canonical === EXPECTED_CANONICAL, `Unexpected canonical URL: ${JSON.stringify(pageContract)}`)
   assert(pageContract.descriptionCount === 1 && pageContract.description === EXPECTED_DESCRIPTION && pageContract.description.length > 0, `Unexpected meta description: ${JSON.stringify(pageContract)}`)
   assert(pageContract.h1s.length === 1 && pageContract.h1s[0] === EXPECTED_H1, `Expected exactly one H1 with the current visible text: ${JSON.stringify(pageContract.h1s)}`)
-  assert(pageContract.footerNavigationCount === 1, `Expected one external-link footer navigation: ${pageContract.footerNavigationCount}`)
-  assert(pageContract.footerLinks.length === EXPECTED_EXTERNAL_LINKS.length, `Unexpected footer link count: ${JSON.stringify(pageContract.footerLinks)}`)
-  assert(pageContract.externalAnchorCount === pageContract.footerLinks.length, `Expected every absolute external anchor to be in the footer link collection: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.footerCount === 1, `Expected exactly one site footer: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.footerOutsideMain, `Expected the footer to be outside main: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.footerInnerCount === 1, `Expected one footer inner row: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.footerNavigationCount === 1, `Expected one footer navigation: ${pageContract.footerNavigationCount}`)
+  assert(pageContract.footerCopyrightCount === 1, `Expected one footer copyright sibling: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.footerCopyright === EXPECTED_FOOTER_COPYRIGHT, `Unexpected footer copyright: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.footerLinks.length === EXPECTED_FOOTER_LINKS.length, `Unexpected footer link count: ${JSON.stringify(pageContract.footerLinks)}`)
+  assert(pageContract.externalAnchorCount === 2, `Expected exactly two external anchors: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.footerExternalAnchorCount === pageContract.externalAnchorCount, `Expected every external anchor to be in the footer: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.externalAnchorOutsideFooterCount === 0, `Found an external anchor outside the footer: ${JSON.stringify(pageContract)}`)
 
-  for (const expectedLink of EXPECTED_EXTERNAL_LINKS) {
-    const link = pageContract.footerLinks.find((candidate) => candidate.href === expectedLink.href)
-    assert(link, `Missing footer link: ${expectedLink.href}`)
-    assert(link.text === expectedLink.text && link.text.length > 3, `Footer link text is not descriptive for ${expectedLink.href}: ${JSON.stringify(link.text)}`)
-    assert(link.target === '_blank', `Footer link must use target=_blank: ${JSON.stringify(link)}`)
-    const relTokens = new Set(link.rel.toLowerCase().split(/\s+/).filter(Boolean))
-    assert(relTokens.has('noopener') && relTokens.has('noreferrer'), `Footer link is missing safe rel tokens: ${JSON.stringify(link)}`)
-  }
+  EXPECTED_FOOTER_LINKS.forEach((expectedLink, index) => {
+    const link = pageContract.footerLinks[index]
+    assert(link, `Missing footer link at index ${index}: ${expectedLink.rawHref}`)
+    assert(link.rawHref === expectedLink.rawHref, `Unexpected raw footer href at index ${index}: ${JSON.stringify(link)}`)
+    assert(link.resolvedHref === new URL(expectedLink.rawHref, pageContract.origin).href, `Unexpected resolved footer href at index ${index}: ${JSON.stringify(link)}`)
+    assert(link.text === expectedLink.text && link.text.length > 3, `Footer link text is not descriptive at index ${index}: ${JSON.stringify(link.text)}`)
+    if (expectedLink.external) {
+      assert(link.target === '_blank', `External footer link must use target=_blank: ${JSON.stringify(link)}`)
+      const relTokens = new Set(link.rel.toLowerCase().split(/\s+/).filter(Boolean))
+      assert(relTokens.has('noopener') && relTokens.has('noreferrer'), `External footer link is missing safe rel tokens: ${JSON.stringify(link)}`)
+    } else {
+      assert(link.target !== '_blank', `Hub footer link must stay in the same tab: ${JSON.stringify(link)}`)
+    }
+  })
 }
 
 async function clickButton(cdp, sessionId, text) {
