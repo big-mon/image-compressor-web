@@ -823,11 +823,17 @@ function App() {
       {errorMessage ? <p className="error-message" role="alert">{errorMessage}</p> : null}
 
       <footer className="footer-note">
-        <span>ローカル処理</span>
-        <span aria-hidden="true">·</span>
-        <span>メタデータ削除</span>
-        <span aria-hidden="true">·</span>
-        <span>JPEG / PNG / WebP</span>
+        <div className="footer-facts">
+          <span>ローカル処理</span>
+          <span aria-hidden="true">·</span>
+          <span>メタデータ削除</span>
+          <span aria-hidden="true">·</span>
+          <span>JPEG / PNG / WebP</span>
+        </div>
+        <nav className="footer-links" aria-label="外部リンク">
+          <a href="https://x.com/big_mon" target="_blank" rel="noopener noreferrer">X @big_mon</a>
+          <a href="https://github.com/big-mon/image-compressor-web" target="_blank" rel="noopener noreferrer">GitHub ソースコード</a>
+        </nav>
       </footer>
     </main>
   )

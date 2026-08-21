@@ -22,6 +22,14 @@ const DIST_DIRECTORY = join(REPOSITORY_ROOT, 'dist')
 const CHROME_PATH = process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const DEFAULT_BASE_PATH = '/image-compressor-web/'
 const DEFAULT_TIMEOUT_MS = 20_000
+const EXPECTED_TITLE = '画像圧縮・トリミングをブラウザで | image-compressor-web'
+const EXPECTED_DESCRIPTION = 'JPEG・PNG・WebPをブラウザ内でトリミング、回転、反転、リサイズ、圧縮。画像を外部へアップロードせず、メタデータを削除して保存できます。'
+const EXPECTED_CANONICAL = 'https://app.damonge.com/image-compressor-web/'
+const EXPECTED_H1 = '画像を、ブラウザの中だけで整える。'
+const EXPECTED_EXTERNAL_LINKS = [
+  { href: 'https://x.com/big_mon', text: 'X @big_mon' },
+  { href: 'https://github.com/big-mon/image-compressor-web', text: 'GitHub ソースコード' },
+]
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -521,6 +529,55 @@ async function waitForFileLoad(cdp, sessionId) {
   }
 }
 
+async function assertPublicMetadataAndFooter(cdp, sessionId) {
+  const pageContract = await evaluate(cdp, sessionId, `(() => {
+    const serializeAnchor = (anchor) => ({
+      href: anchor.href,
+      rel: anchor.getAttribute('rel') ?? '',
+      target: anchor.getAttribute('target') ?? '',
+      text: anchor.textContent?.trim() ?? '',
+    })
+    const canonicalLinks = document.querySelectorAll('link[rel="canonical"]')
+    const descriptionMetas = document.querySelectorAll('meta[name="description"]')
+    const footerNavigation = document.querySelectorAll('footer nav[aria-label="外部リンク"]')
+    return {
+      canonical: canonicalLinks[0]?.getAttribute('href') ?? '',
+      canonicalCount: canonicalLinks.length,
+      description: descriptionMetas[0]?.getAttribute('content') ?? '',
+      descriptionCount: descriptionMetas.length,
+      externalAnchors: [...document.querySelectorAll('a[href]')]
+        .filter((anchor) => /^https?:/i.test(anchor.href))
+        .map(serializeAnchor),
+      footerLinks: [...footerNavigation].flatMap((navigation) => [...navigation.querySelectorAll('a[href]')].map(serializeAnchor)),
+      footerNavigationCount: footerNavigation.length,
+      h1s: [...document.querySelectorAll('h1')].map((heading) => heading.textContent?.trim() ?? ''),
+      title: document.title,
+    }
+  })()`)
+
+  assert(pageContract.title === EXPECTED_TITLE, `Unexpected document title: ${JSON.stringify(pageContract.title)}`)
+  assert(pageContract.canonicalCount === 1 && pageContract.canonical === EXPECTED_CANONICAL, `Unexpected canonical URL: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.descriptionCount === 1 && pageContract.description === EXPECTED_DESCRIPTION && pageContract.description.length > 0, `Unexpected meta description: ${JSON.stringify(pageContract)}`)
+  assert(pageContract.h1s.length === 1 && pageContract.h1s[0] === EXPECTED_H1, `Expected exactly one H1 with the current visible text: ${JSON.stringify(pageContract.h1s)}`)
+  assert(pageContract.footerNavigationCount === 1, `Expected one external-link footer navigation: ${pageContract.footerNavigationCount}`)
+  assert(pageContract.footerLinks.length === EXPECTED_EXTERNAL_LINKS.length, `Unexpected footer link count: ${JSON.stringify(pageContract.footerLinks)}`)
+
+  for (const expectedLink of EXPECTED_EXTERNAL_LINKS) {
+    const link = pageContract.footerLinks.find((candidate) => candidate.href === expectedLink.href)
+    assert(link, `Missing footer link: ${expectedLink.href}`)
+    assert(link.text === expectedLink.text && link.text.length > 3, `Footer link text is not descriptive for ${expectedLink.href}: ${JSON.stringify(link.text)}`)
+    assert(link.target === '_blank', `Footer link must use target=_blank: ${JSON.stringify(link)}`)
+    const relTokens = new Set(link.rel.toLowerCase().split(/\s+/).filter(Boolean))
+    assert(relTokens.has('noopener') && relTokens.has('noreferrer'), `Footer link is missing safe rel tokens: ${JSON.stringify(link)}`)
+  }
+
+  for (const externalAnchor of pageContract.externalAnchors) {
+    assert(externalAnchor.target === '_blank', `External anchor must use target=_blank: ${JSON.stringify(externalAnchor)}`)
+    const relTokens = new Set(externalAnchor.rel.toLowerCase().split(/\s+/).filter(Boolean))
+    assert(relTokens.has('noopener') && relTokens.has('noreferrer'), `External anchor is missing safe rel tokens: ${JSON.stringify(externalAnchor)}`)
+  }
+}
+
 async function clickButton(cdp, sessionId, text) {
   const quotedText = JSON.stringify(text)
   await evaluate(cdp, sessionId, `(() => {
@@ -766,6 +823,7 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
 
   await cdp.send('Page.navigate', { url: pageUrl }, sessionId)
   await waitForDom(cdp, sessionId, `document.readyState === 'complete' && document.querySelector('input[type="file"]') !== null`, 'the built app to load')
+  await assertPublicMetadataAndFooter(cdp, sessionId)
   await setFileInput(cdp, sessionId, fixturePath)
   await waitForFileLoad(cdp, sessionId)
   await waitForDom(cdp, sessionId, `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === '16 × 32 px'`, 'the normalized source dimensions')
