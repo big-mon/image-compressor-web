@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -7,6 +9,7 @@ import {
 
 const origin = 'http://127.0.0.1:4173'
 const basePath = '/image-compressor-web/'
+const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 const allowedPaths = createStaticSurfaceAllowlist(basePath, [
   `${basePath}assets/index-abc123.js`,
   `${basePath}assets/index-def456.css`,
@@ -25,6 +28,16 @@ function httpRequest(pathname, overrides = {}) {
 }
 
 describe('browser network privacy harness', () => {
+  it('declares the managed Cloudflare Analytics hosting boundary in source HTML', () => {
+    const csp = indexHtml.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/)?.[1]
+    const scriptSrc = csp?.match(/(?:^|;\s*)script-src ([^;]+)/)?.[1].trim().split(/\s+/)
+    const connectSrc = csp?.match(/(?:^|;\s*)connect-src ([^;]+)/)?.[1].trim().split(/\s+/)
+
+    expect(scriptSrc).toEqual(["'self'", 'https://static.cloudflareinsights.com'])
+    expect(connectSrc).toEqual(["'self'"])
+    expect(indexHtml).not.toContain('beacon.min.js')
+  })
+
   it('allows only the built static surface over read-only HTTP', () => {
     expect(() => assertNetworkIsLocal([
       httpRequest(basePath),

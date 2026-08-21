@@ -19,7 +19,7 @@
 
 ## ほぼすべての変更に効く不変条件
 
-- **境界:** static browser-only。backend、image upload、analytics、runtime third-party call を追加しない。`index.html` の `connect-src 'self'` も維持する。
+- **境界・Analytics privacy:** static browser-only。backend、image upload、アプリ独自の analytics/telemetry、app-owned runtime third-party integration を追加しない。Production hosting の許可例外は [docs/architecture.md の Privacy section](docs/architecture.md#privacy-network-and-csp-boundary) に従い、`index.html` の `connect-src 'self'` を維持する。Analytics の拡張、custom event、画像由来フィールドの追加は、同 section の privacy contract と live network evidence を同時に更新する。
 - **入力:** supported raster は JPEG / PNG / WebP のみ。animated WebP、HEIC、AVIF、GIF は v1 の入力契約に含めない。
 - **変換順:** orientation normalize → rotate/flip → crop in final orientation → resize → encode。UI の見た目だけ別順序にしない。
 - **出力プライバシー:** JPEG / PNG / WebP の encode 結果は必ず metadata stripping を通す。構造検証に失敗したら fail closed で Blob/result を返さない。
