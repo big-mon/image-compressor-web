@@ -24,7 +24,13 @@ import {
   type RasterProcessor,
   type RasterResult,
 } from './image/raster'
-import { createCropSurfaceStyle, createStageTransform } from './image/stage'
+import {
+  CROP_SURFACE_DESKTOP_MAX_HEIGHT_PX,
+  CROP_SURFACE_MOBILE_MAX_HEIGHT_PX,
+  createCropSurfaceStyle,
+  createStageTransform,
+  getCropSurfaceMaxWidthPx,
+} from './image/stage'
 
 const ASPECT_OPTIONS: readonly { value: AspectRatioPreset; label: string }[] = [
   { value: 'free', label: '自由' },
@@ -621,8 +627,8 @@ function App() {
     ? {
         ...createCropSurfaceStyle(geometry.displaySize),
         maxWidth: undefined,
-        '--crop-stage-desktop-width': `${Math.min(320, 320 * geometry.displaySize.width / geometry.displaySize.height)}px`,
-        '--crop-stage-mobile-width': `${Math.min(200, 200 * geometry.displaySize.width / geometry.displaySize.height)}px`,
+        '--crop-stage-desktop-width': `${getCropSurfaceMaxWidthPx(geometry.displaySize, CROP_SURFACE_DESKTOP_MAX_HEIGHT_PX)}px`,
+        '--crop-stage-mobile-width': `${getCropSurfaceMaxWidthPx(geometry.displaySize, CROP_SURFACE_MOBILE_MAX_HEIGHT_PX)}px`,
       }
     : undefined
 

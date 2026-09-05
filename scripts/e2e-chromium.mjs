@@ -32,6 +32,10 @@ const EXPECTED_FOOTER_COPYRIGHT = '© 2026 image-compressor-web'
 const SCREENSHOT_DIRECTORY = process.env.E2E_SCREENSHOT_DIR ? resolve(process.env.E2E_SCREENSHOT_DIR) : undefined
 const DESKTOP_VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }
 const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }
+const CROP_SURFACE_SIZING_CASES = [
+  { key: 'landscape-16-9', filename: 'e2e-landscape-16-9.png', width: 160, height: 90 },
+  { key: 'panorama-10-1', filename: 'e2e-panorama-10-1.png', width: 1000, height: 100 },
+]
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -739,6 +743,95 @@ async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
   return layout
 }
 
+async function captureCropSurfaceSizing(cdp, sessionId) {
+  return evaluate(cdp, sessionId, `(() => {
+    const surface = document.querySelector('.crop-surface')
+    const sourceImage = document.querySelector('.stage-image')
+    const workspace = document.querySelector('.workspace')
+    const parent = surface?.parentElement
+    const parentStyle = parent ? getComputedStyle(parent) : undefined
+    const availableRect = parent && parentStyle?.display !== 'contents'
+      ? parent.getBoundingClientRect()
+      : workspace?.getBoundingClientRect()
+    const surfaceRect = surface?.getBoundingClientRect()
+    return {
+      availableWidth: availableRect?.width,
+      sourceNaturalHeight: sourceImage?.naturalHeight,
+      sourceNaturalWidth: sourceImage?.naturalWidth,
+      surfaceHeight: surfaceRect?.height,
+      surfaceRatio: surfaceRect ? surfaceRect.width / surfaceRect.height : undefined,
+      surfaceWidth: surfaceRect?.width,
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+    }
+  })()`)
+}
+
+async function runCropSurfaceSizingRegression({ cdp, sessionId, layoutFixtures }) {
+  const results = {}
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport for crop surface sizing')
+
+  for (const fixture of layoutFixtures) {
+    const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = ${fixture.width}
+      canvas.height = ${fixture.height}
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Could not create a 2D canvas context for the layout fixture.')
+      const halfWidth = canvas.width / 2
+      const halfHeight = canvas.height / 2
+      const quadrants = [
+        ['#e63946', 0, 0, halfWidth, halfHeight],
+        ['#457b9d', halfWidth, 0, halfWidth, halfHeight],
+        ['#f4a261', 0, halfHeight, halfWidth, halfHeight],
+        ['#2a9d8f', halfWidth, halfHeight, halfWidth, halfHeight],
+      ]
+      for (const [color, x, y, width, height] of quadrants) {
+        context.fillStyle = color
+        context.fillRect(x, y, width, height)
+      }
+      return canvas.toDataURL('image/png')
+    })()`)
+    const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
+    assert(encodedFixture, `${fixture.key} browser canvas did not return a PNG data URL.`)
+    await writeFile(fixture.path, Buffer.from(encodedFixture, 'base64'))
+    await setFileInput(cdp, sessionId, fixture.path)
+    const expectedDimensions = `${fixture.width} × ${fixture.height} px`
+    await waitForDom(
+      cdp,
+      sessionId,
+      `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === ${JSON.stringify(expectedDimensions)}`,
+      `${fixture.key} source dimensions`,
+    )
+    await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, `${fixture.key} Worker preview`)
+
+    const caseResults = {}
+    for (const [mode, viewport, heightCap] of [
+      ['desktop', DESKTOP_VIEWPORT, 320],
+      ['mobile', MOBILE_VIEWPORT, 200],
+    ]) {
+      await setViewport(cdp, sessionId, viewport)
+      await waitForDom(cdp, sessionId, `window.innerWidth === ${viewport.width} && window.innerHeight === ${viewport.height}`, `the ${mode} viewport for ${fixture.key}`)
+      const layout = await captureCropSurfaceSizing(cdp, sessionId)
+      const aspectRatio = fixture.width / fixture.height
+      const expectedWidth = Math.min(layout.availableWidth, heightCap * aspectRatio)
+      assert(layout.sourceNaturalWidth === fixture.width && layout.sourceNaturalHeight === fixture.height, `${fixture.key} source dimensions were not decoded as expected: ${JSON.stringify(layout)}`)
+      assert(layout.availableWidth > 0, `${fixture.key} has no measurable ${mode} width: ${JSON.stringify(layout)}`)
+      assert(Math.abs(layout.surfaceWidth - expectedWidth) <= 2, `${fixture.key} did not use the expected ${mode} width: ${JSON.stringify({ layout, expectedWidth, heightCap })}`)
+      assert(layout.surfaceHeight <= heightCap + 2, `${fixture.key} exceeded the ${mode} crop surface height cap: ${JSON.stringify({ layout, heightCap })}`)
+      assert(Math.abs(layout.surfaceRatio - aspectRatio) <= Math.max(0.05, aspectRatio * 0.01), `${fixture.key} changed its ${mode} aspect ratio: ${JSON.stringify({ layout, aspectRatio })}`)
+      if (fixture.key === 'panorama-10-1') {
+        assert(Math.abs(layout.surfaceWidth - layout.availableWidth) <= 2, `${fixture.key} did not use the available ${mode} width: ${JSON.stringify(layout)}`)
+      }
+      await captureScreenshot(cdp, sessionId, `${fixture.key}-${mode}.png`)
+      caseResults[mode] = layout
+    }
+    results[fixture.key] = caseResults
+  }
+  return results
+}
+
 async function openDetails(cdp, sessionId, selector) {
   const quotedSelector = JSON.stringify(selector)
   const opened = await evaluate(cdp, sessionId, `(() => {
@@ -1191,7 +1284,7 @@ async function capturePixelEvidence(cdp, sessionId) {
   })()`)
 }
 
-async function runScenario({ allowedPaths, basePath, downloadDirectory, fixturePath, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation }) {
+async function runScenario({ allowedPaths, basePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
   const screenshots = {}
@@ -1365,6 +1458,8 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
   const outputFamilies = detectMetadataFamilies(outputBytes)
   assert(outputDimensions.width === 16 && outputDimensions.height === 16, `Downloaded JPEG dimensions were ${outputDimensions.width}x${outputDimensions.height}, expected 16x16.`)
   assert(Object.values(outputFamilies).every((value) => value === false), `Injected JPEG metadata remained in output: ${JSON.stringify(outputFamilies)}`)
+
+  const cropSurfaceSizing = await runCropSurfaceSizingRegression({ cdp, layoutFixtures, sessionId })
   diagnostics.assertClean()
 
   const observedRequests = network.getObservedRequests()
@@ -1382,6 +1477,7 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
       sourceExifOrientation: sourceOrientation,
     },
     network: formatNetworkReport(observedRequests),
+    cropSurfaceSizing,
     preview: {
       ...previewState,
       pixelEvidence: {
@@ -1400,6 +1496,10 @@ async function main() {
   const profileDirectory = join(temporaryRoot, 'chrome-profile')
   const downloadDirectory = join(temporaryRoot, 'downloads')
   const fixturePath = join(temporaryRoot, 'e2e-metadata-fixture.jpg')
+  const layoutFixtures = CROP_SURFACE_SIZING_CASES.map((fixture) => ({
+    ...fixture,
+    path: join(temporaryRoot, fixture.filename),
+  }))
   await mkdir(profileDirectory)
   await mkdir(downloadDirectory)
 
@@ -1444,6 +1544,7 @@ async function main() {
       cdp,
       downloadDirectory,
       fixturePath,
+      layoutFixtures,
       origin: staticServer.origin,
       pageUrl: staticServer.pageUrl,
       requestLog: staticServer.requestLog,
