@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  applyZoomAndPan,
   calculateImageGeometry,
   constrainCrop,
   createEditState,
   rotateEditState,
+  translateCrop,
   type ImageEditState,
 } from './geometry'
 
@@ -202,6 +204,105 @@ describe('image geometry', () => {
     )
 
     expect(crop).toEqual({ x: 0, y: 200, width: 400, height: 100 })
+  })
+
+  it.each([
+    ['right', { x: 600, y: 0 }, { x: 600, y: 0 }],
+    ['bottom', { x: 0, y: 300 }, { x: 0, y: 300 }],
+    ['left', { x: -600, y: 0 }, { x: 0, y: 0 }],
+    ['top', { x: 0, y: -300 }, { x: 0, y: 0 }],
+  ] as const)('translates a crop to the %s display bound', (_edge, delta, expectedPosition) => {
+    const crop = translateCrop(
+      { x: 0, y: 0, width: 400, height: 300 },
+      delta,
+      { width: 1000, height: 600 },
+      'free',
+    )
+
+    expect(crop).toEqual({ ...expectedPosition, width: 400, height: 300 })
+  })
+
+  it('translates the effective crop for an off-center zoomed frame', () => {
+    const sourceSize = { width: 1000, height: 600 }
+    const state: ImageEditState = {
+      ...createEditState(sourceSize),
+      aspectRatio: 'free',
+      crop: { x: 100, y: 50, width: 400, height: 300 },
+      zoom: 2,
+      panX: 0.25,
+      panY: -0.4,
+    }
+
+    const effectiveCrop = calculateImageGeometry(sourceSize, state).crop
+
+    expect(effectiveCrop).toEqual({ x: 350, y: 75, width: 200, height: 150 })
+    expect(translateCrop(
+      effectiveCrop,
+      { x: 600, y: 490 },
+      sourceSize,
+      'free',
+    )).toEqual({ x: 800, y: 450, width: 200, height: 150 })
+  })
+
+  it.each([
+    ['left', -1, 0, 0, 50],
+    ['right', 1, 0, 600, 50],
+    ['top', 0, -1, 100, 0],
+    ['bottom', 0, 1, 100, 300],
+  ] as const)('reaches the off-center %s edge at a normalized pan endpoint', (_edge, panX, panY, expectedX, expectedY) => {
+    expect(applyZoomAndPan(
+      { x: 100, y: 50, width: 400, height: 300 },
+      { width: 1000, height: 600 },
+      1,
+      panX,
+      panY,
+    )).toEqual({ x: expectedX, y: expectedY, width: 400, height: 300 })
+  })
+
+  it.each([
+    ['negative X', -0.25, 0, 75, 50],
+    ['positive X', 0.25, 0, 225, 50],
+    ['negative Y', 0, -0.4, 100, 30],
+    ['positive Y', 0, 0.4, 100, 150],
+  ] as const)('interpolates an off-center crop for an intermediate %s pan', (_axis, panX, panY, expectedX, expectedY) => {
+    expect(applyZoomAndPan(
+      { x: 100, y: 50, width: 400, height: 300 },
+      { width: 1000, height: 600 },
+      1,
+      panX,
+      panY,
+    )).toEqual({ x: expectedX, y: expectedY, width: 400, height: 300 })
+  })
+
+  it('interpolates from the zoomed neutral origin to each edge', () => {
+    expect(applyZoomAndPan(
+      { x: 100, y: 50, width: 400, height: 300 },
+      { width: 1000, height: 600 },
+      2,
+      0.25,
+      -0.4,
+    )).toEqual({ x: 350, y: 75, width: 200, height: 150 })
+  })
+
+  it('keeps the only origin when the effective crop has zero travel', () => {
+    expect(applyZoomAndPan(
+      { x: 0, y: 0, width: 1000, height: 600 },
+      { width: 1000, height: 600 },
+      1,
+      -1,
+      1,
+    )).toEqual({ x: 0, y: 0, width: 1000, height: 600 })
+  })
+
+  it('preserves the selected aspect ratio when resizing the effective crop', () => {
+    const crop = constrainCrop(
+      { x: 300, y: 35, width: 320, height: 260 },
+      { width: 1000, height: 600 },
+      '4:3',
+    )
+
+    expect(crop).toEqual({ x: 300, y: 45, width: 320, height: 240 })
+    expect(crop.width / crop.height).toBeCloseTo(4 / 3)
   })
 
   it('applies zoom and clamps normalized pan inside the display bounds', () => {

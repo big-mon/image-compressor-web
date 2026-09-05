@@ -113,6 +113,11 @@ function clampCropToBounds(crop: CropRect, displaySize: Size): CropRect {
   }
 }
 
+function interpolatePanOrigin(neutralOrigin: number, maximumTravel: number, pan: number): number {
+  const targetOrigin = pan < 0 ? 0 : maximumTravel
+  return neutralOrigin + (targetOrigin - neutralOrigin) * Math.abs(pan)
+}
+
 /**
  * Applies the editor's effective framing without allowing the crop outside the
  * final displayed image. panX and panY are normalized controls in [-1, 1].
@@ -133,10 +138,12 @@ export function applyZoomAndPan(
   const maximumY = displaySize.height - height
   const panX = clamp(finiteOr(panXValue, 0), -1, 1)
   const panY = clamp(finiteOr(panYValue, 0), -1, 1)
+  const neutralX = clamp(centerX - width / 2, 0, maximumX)
+  const neutralY = clamp(centerY - height / 2, 0, maximumY)
 
   return {
-    x: clamp(centerX + panX * maximumX / 2 - width / 2, 0, maximumX),
-    y: clamp(centerY + panY * maximumY / 2 - height / 2, 0, maximumY),
+    x: clamp(interpolatePanOrigin(neutralX, maximumX, panX), 0, maximumX),
+    y: clamp(interpolatePanOrigin(neutralY, maximumY, panY), 0, maximumY),
     width,
     height,
   }
@@ -177,6 +184,20 @@ export function constrainCrop(crop: CropRect, displaySize: Size, preset: AspectR
     width,
     height,
   }
+}
+
+/** Translates a final-display crop by a pixel delta and keeps it constrained. */
+export function translateCrop(
+  crop: CropRect,
+  delta: Pick<CropRect, 'x' | 'y'>,
+  displaySize: Size,
+  preset: AspectRatioPreset,
+): CropRect {
+  return constrainCrop(
+    { ...crop, x: crop.x + delta.x, y: crop.y + delta.y },
+    displaySize,
+    preset,
+  )
 }
 
 function calculateOutputSize(croppedSize: Size, resize?: ResizeOptions): Size {
