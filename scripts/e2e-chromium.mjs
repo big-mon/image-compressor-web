@@ -25,13 +25,13 @@ const DEFAULT_TIMEOUT_MS = 20_000
 const EXPECTED_TITLE = '画像圧縮・トリミングをブラウザで | image-compressor-web'
 const EXPECTED_DESCRIPTION = 'JPEG・PNG・WebPをブラウザ内でトリミング、回転、反転、リサイズ、圧縮。画像を外部へアップロードせず、メタデータを削除して保存できます。'
 const EXPECTED_CANONICAL = 'https://app.damonge.com/image-compressor-web/'
-const EXPECTED_H1 = '画像を、ブラウザの中だけで整える。'
-const EXPECTED_FOOTER_LINKS = [
-  { rawHref: '/', text: 'App Hubへ戻る', external: false },
-  { rawHref: 'https://x.com/big_mon', text: 'X @big_mon', external: true },
-  { rawHref: 'https://github.com/big-mon/image-compressor-web', text: 'GitHub', external: true },
-]
+const EXPECTED_H1 = '画像を圧縮・編集'
+const EXPECTED_REASSURANCE = '画像のアップロードなし'
+const EXPECTED_PRIVACY_COPY = 'すべての処理はこのブラウザ内で完結します。ピクセルにデコードしてから再エンコードするため、出力画像のメタデータは削除されます。JPEGの回転もロスレス変換ではなく再エンコードです。'
 const EXPECTED_FOOTER_COPYRIGHT = '© 2026 image-compressor-web'
+const SCREENSHOT_DIRECTORY = process.env.E2E_SCREENSHOT_DIR ? resolve(process.env.E2E_SCREENSHOT_DIR) : undefined
+const DESKTOP_VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }
+const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -531,7 +531,234 @@ async function waitForFileLoad(cdp, sessionId) {
   }
 }
 
-async function assertPublicMetadataAndFooter(cdp, sessionId) {
+async function setViewport(cdp, sessionId, viewport) {
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: viewport.deviceScaleFactor,
+    mobile: viewport.mobile,
+    screenWidth: viewport.width,
+    screenHeight: viewport.height,
+  }, sessionId)
+}
+
+async function captureScreenshot(cdp, sessionId, filename) {
+  if (!SCREENSHOT_DIRECTORY) {
+    return undefined
+  }
+  await mkdir(SCREENSHOT_DIRECTORY, { recursive: true })
+  const result = await cdp.send('Page.captureScreenshot', {
+    captureBeyondViewport: false,
+    format: 'png',
+    fromSurface: true,
+  }, sessionId)
+  const screenshotPath = join(SCREENSHOT_DIRECTORY, filename)
+  await writeFile(screenshotPath, Buffer.from(result.data, 'base64'))
+  return screenshotPath
+}
+
+async function captureToolLayout(cdp, sessionId) {
+  return evaluate(cdp, sessionId, `(() => {
+    const describe = (selector) => {
+      const element = document.querySelector(selector)
+      if (!element) return null
+      const rect = element.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      return {
+        bottom: rect.bottom,
+        fontSize: Number.parseFloat(style.fontSize),
+        height: rect.height,
+        left: rect.left,
+        right: rect.right,
+        text: element.textContent?.trim() ?? '',
+        top: rect.top,
+        cursor: style.cursor,
+        visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+        width: rect.width,
+      }
+    }
+    const describeBox = (rect) => ({
+      bottom: rect.bottom,
+      height: rect.height,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      width: rect.width,
+    })
+    const describeComparisonImage = (media) => {
+      const image = media.querySelector('img')
+      if (!(image instanceof HTMLImageElement)) return null
+      const mediaRect = media.getBoundingClientRect()
+      const imageRect = image.getBoundingClientRect()
+      return {
+        image: {
+          ...describeBox(imageRect),
+          visible: imageRect.width > 0 && imageRect.height > 0,
+        },
+        media: describeBox(mediaRect),
+        objectFit: getComputedStyle(image).objectFit,
+      }
+    }
+    const dropZone = document.querySelector('.drop-zone')
+    const advancedControls = document.querySelector('.advanced-controls')
+    return {
+      advancedControls: advancedControls ? {
+        ...describe('.advanced-controls'),
+        open: advancedControls.open,
+      } : null,
+      afterCard: describe('.after-card'),
+      changeImage: describe('.change-image-button'),
+      comparisonCardCount: document.querySelectorAll('.comparison-card').length,
+      comparisonImages: [...document.querySelectorAll('.comparison-media')].map(describeComparisonImage),
+      comparisonInEditor: document.querySelector('.comparison-section')?.closest('.editor-column') !== null,
+      comparisonMedia: describe('.comparison-media'),
+      comparisonNote: describe('.comparison-note'),
+      comparisonSection: describe('.comparison-section'),
+      cropSurface: describe('.crop-surface'),
+      dropZone: dropZone ? {
+        ...describe('.drop-zone'),
+        htmlFor: dropZone.htmlFor,
+        role: dropZone.getAttribute('role'),
+        tabIndex: dropZone.tabIndex,
+      } : null,
+      emptyStatePresent: document.querySelector('.empty-state') !== null,
+      editor: describe('.editor-column'),
+      editorActions: describe('.editor-actions'),
+      h1: describe('h1'),
+      h1Count: document.querySelectorAll('h1').length,
+      mobileWidth: window.innerWidth,
+      noHorizontalOverflow: document.documentElement.scrollWidth <= window.innerWidth + 1 && document.body.scrollWidth <= window.innerWidth + 1,
+      outputFormat: describe('#output-format'),
+      privacyCardPresent: document.querySelector('.privacy-card') !== null,
+      privacyCopy: document.querySelector('.privacy-details-body')?.textContent?.trim() ?? '',
+      quality: describe('#quality'),
+      reassurance: describe('.tool-reassurance'),
+      settings: describe('.settings-column'),
+      workspace: describe('.workspace'),
+      download: describe('.download-button'),
+      privacyDetails: describe('.privacy-details'),
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+    }
+  })()`)
+}
+
+function assertVisibleRect(rect, description) {
+  assert(rect?.visible && rect.width > 0 && rect.height > 0, `${description} is not visible: ${JSON.stringify(rect)}`)
+}
+
+function assertInsideViewport(rect, viewport, description) {
+  assertVisibleRect(rect, description)
+  assert(rect.top >= -1 && rect.bottom <= viewport.height + 1, `${description} is outside the initial viewport: ${JSON.stringify({ rect, viewport })}`)
+}
+
+function assertBeginsInViewport(rect, viewport, description) {
+  assertVisibleRect(rect, description)
+  assert(rect.top >= -1 && rect.top <= viewport.height + 1, `${description} does not begin in the initial viewport: ${JSON.stringify({ rect, viewport })}`)
+}
+
+function assertComparisonImagesFit(layout, mode) {
+  assert(layout.comparisonImages.length === 2 && layout.comparisonImages.every(Boolean), `Expected two comparison images on ${mode}: ${JSON.stringify(layout.comparisonImages)}`)
+  for (const [index, comparisonImage] of layout.comparisonImages.entries()) {
+    const description = `${mode} comparison image ${index + 1}`
+    assert(comparisonImage.objectFit === 'contain', `${description} does not use object-fit: contain: ${JSON.stringify(comparisonImage)}`)
+    assertVisibleRect(comparisonImage.image, description)
+    assert(
+      comparisonImage.image.left >= comparisonImage.media.left - 1 &&
+        comparisonImage.image.right <= comparisonImage.media.right + 1 &&
+        comparisonImage.image.top >= comparisonImage.media.top - 1 &&
+        comparisonImage.image.bottom <= comparisonImage.media.bottom + 1,
+      `${description} is not contained by its comparison media: ${JSON.stringify(comparisonImage)}`,
+    )
+  }
+}
+
+async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
+  const layout = await captureToolLayout(cdp, sessionId)
+  assert(layout.viewportWidth === viewport.width && layout.viewportHeight === viewport.height, `Unexpected empty ${mode} viewport: ${JSON.stringify(layout)}`)
+  assert(layout.h1Count === 1 && layout.h1?.text === EXPECTED_H1, `Expected one compact tool H1 in the empty state: ${JSON.stringify(layout)}`)
+  assert(layout.h1.fontSize <= 32, `The tool H1 is too large for a compact toolbar: ${JSON.stringify(layout.h1)}`)
+  assertInsideViewport(layout.h1, viewport, `empty ${mode} H1`)
+  assertVisibleRect(layout.dropZone, `empty ${mode} drop zone`)
+  assert(layout.dropZone.top <= viewport.height * 0.2 && layout.dropZone.height >= viewport.height * 0.45, `The empty drop zone does not occupy useful first-view space: ${JSON.stringify({ dropZone: layout.dropZone, viewport })}`)
+  assert(layout.dropZone.bottom <= viewport.height + 1, `The empty drop zone is not available in the first viewport: ${JSON.stringify(layout.dropZone)}`)
+  assert(layout.dropZone.role === 'button' && layout.dropZone.tabIndex === 0 && layout.dropZone.htmlFor === 'image-input', `The empty drop zone is not keyboard/file-input reachable: ${JSON.stringify(layout.dropZone)}`)
+  assert(layout.emptyStatePresent === false && layout.privacyCardPresent === false, `Legacy empty/hero content remains in the empty state: ${JSON.stringify(layout)}`)
+  assert(layout.changeImage === null, `The loaded-only change-image affordance is visible before selection: ${JSON.stringify(layout.changeImage)}`)
+  assert(layout.dropZone.cursor === 'pointer', `The empty ${mode} drop zone is not pointer-activated: ${JSON.stringify(layout.dropZone)}`)
+  assert(layout.reassurance?.text === EXPECTED_REASSURANCE, `The no-upload reassurance changed unexpectedly: ${JSON.stringify(layout.reassurance)}`)
+  assert(layout.privacyCopy === EXPECTED_PRIVACY_COPY, `The privacy disclosure changed unexpectedly: ${JSON.stringify(layout.privacyCopy)}`)
+  assertInsideViewport(layout.reassurance, viewport, `no-upload reassurance on empty ${mode}`)
+  assert(layout.noHorizontalOverflow, `Empty ${mode} layout overflows horizontally: ${JSON.stringify(layout)}`)
+  const focusReachedDropZone = await evaluate(cdp, sessionId, `(() => {
+    const dropZone = document.querySelector('.drop-zone')
+    dropZone?.focus()
+    return document.activeElement === dropZone
+  })()`)
+  assert(focusReachedDropZone === true, `The empty ${mode} drop zone could not receive keyboard focus.`)
+  return layout
+}
+
+async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
+  const layout = await captureToolLayout(cdp, sessionId)
+  assert(layout.viewportWidth === viewport.width && layout.viewportHeight === viewport.height, `Unexpected ${mode} viewport: ${JSON.stringify(layout)}`)
+  assert(layout.dropZone === null, `The full upload area remains after loading on ${mode}: ${JSON.stringify(layout.dropZone)}`)
+  assertVisibleRect(layout.changeImage, `${mode} change-image affordance`)
+  assertVisibleRect(layout.cropSurface, `${mode} crop surface`)
+  assert(layout.cropSurface.height <= (mode === 'mobile' ? 204 : 324), `${mode} crop surface is too tall: ${JSON.stringify(layout.cropSurface)}`)
+  assert(layout.comparisonInEditor, `The transformed preview is not adjacent to the editor on ${mode}.`)
+  assertVisibleRect(layout.editorActions, `${mode} crop action row`)
+  assert(layout.editorActions.top >= layout.cropSurface.bottom - 1 && layout.editorActions.top - layout.cropSurface.bottom < 24, `${mode} crop action row is not immediately after the crop surface: ${JSON.stringify({ cropSurface: layout.cropSurface, editorActions: layout.editorActions })}`)
+  assertVisibleRect(layout.comparisonSection, `${mode} comparison section`)
+  assert(layout.comparisonSection.top > layout.editorActions.bottom, `${mode} comparison section precedes the crop action row: ${JSON.stringify({ comparisonSection: layout.comparisonSection, editorActions: layout.editorActions })}`)
+  assert(layout.comparisonCardCount === 2, `Expected compact before/after cards on ${mode}: ${JSON.stringify(layout)}`)
+  assert(layout.comparisonNote?.text === 'プレビュー', `The comparison note still exposes implementation jargon on ${mode}: ${JSON.stringify(layout.comparisonNote)}`)
+  assertVisibleRect(layout.comparisonMedia, `${mode} comparison media`)
+  assert(layout.comparisonMedia.height <= (mode === 'mobile' ? 124 : 184), `${mode} comparison media is not compact: ${JSON.stringify(layout.comparisonMedia)}`)
+  assertComparisonImagesFit(layout, mode)
+  assertVisibleRect(layout.afterCard, `${mode} transformed preview card`)
+  assert(layout.afterCard.top >= layout.comparisonSection.top, `The transformed preview card is outside the comparison section on ${mode}: ${JSON.stringify({ comparisonSection: layout.comparisonSection, afterCard: layout.afterCard })}`)
+  assert(layout.advancedControls && layout.advancedControls.open === false && layout.advancedControls.top > layout.comparisonSection.bottom, `Advanced controls are not deferred below the preview on ${mode}: ${JSON.stringify(layout.advancedControls)}`)
+  assert(layout.noHorizontalOverflow, `Loaded ${mode} layout overflows horizontally: ${JSON.stringify(layout)}`)
+
+  if (mode === 'desktop') {
+    assert(layout.settings.left >= layout.editor.right - 1, `Desktop output settings are not in a right sidebar: ${JSON.stringify({ editor: layout.editor, settings: layout.settings })}`)
+    assertInsideViewport(layout.outputFormat, viewport, 'desktop output format')
+    assertInsideViewport(layout.quality, viewport, 'desktop quality')
+    assertInsideViewport(layout.download, viewport, 'desktop download')
+    assert(layout.outputFormat.fontSize >= 16 && layout.download.fontSize >= 16, `Desktop key output controls are too small: ${JSON.stringify({ outputFormat: layout.outputFormat, download: layout.download })}`)
+  } else {
+    assert(layout.settings.left <= layout.workspace.left + 1, `Mobile output settings did not align with the image workspace: ${JSON.stringify({ workspace: layout.workspace, settings: layout.settings })}`)
+    assert(layout.outputFormat.top > layout.cropSurface.bottom, `Mobile output controls do not follow the image workspace: ${JSON.stringify({ cropSurface: layout.cropSurface, outputFormat: layout.outputFormat })}`)
+    assertBeginsInViewport(layout.outputFormat, viewport, 'mobile output format')
+    assertBeginsInViewport(layout.quality, viewport, 'mobile quality')
+    assertVisibleRect(layout.download, 'mobile download')
+    assert(layout.comparisonSection.top > layout.settings.bottom, `Mobile before/after comparison does not follow the output settings: ${JSON.stringify({ comparisonSection: layout.comparisonSection, settings: layout.settings })}`)
+    assert(layout.outputFormat.top < layout.advancedControls.top && layout.download.bottom < layout.advancedControls.top, `Mobile essential output/save controls do not precede advanced controls: ${JSON.stringify(layout)}`)
+  }
+  return layout
+}
+
+async function openDetails(cdp, sessionId, selector) {
+  const quotedSelector = JSON.stringify(selector)
+  const opened = await evaluate(cdp, sessionId, `(() => {
+    const details = document.querySelector(${quotedSelector})
+    if (!(details instanceof HTMLDetailsElement)) throw new Error('Details element not found: ' + ${quotedSelector})
+    const summary = details.querySelector(':scope > summary')
+    if (!(summary instanceof HTMLElement)) throw new Error('Details summary not found: ' + ${quotedSelector})
+    summary.click()
+    return details.open
+  })()`)
+  assert(opened === true, `Could not open details disclosure: ${selector}`)
+}
+
+async function assertPublicMetadataAndFooter(cdp, sessionId, basePath) {
+  const expectedFooterLinks = [
+    { rawHref: '/', text: 'App Hubへ戻る', external: false },
+    { rawHref: 'https://x.com/big_mon', text: 'X @big_mon', external: true },
+    { rawHref: 'https://github.com/big-mon/image-compressor-web', text: 'GitHub', external: true },
+    { rawHref: `${basePath}guide.html`, text: '使い方ガイド', external: false },
+  ]
   const pageContract = await evaluate(cdp, sessionId, `(() => {
     const serializeAnchor = (anchor) => ({
       rawHref: anchor.getAttribute('href') ?? '',
@@ -580,12 +807,12 @@ async function assertPublicMetadataAndFooter(cdp, sessionId) {
   assert(pageContract.footerNavigationCount === 1, `Expected one footer navigation: ${pageContract.footerNavigationCount}`)
   assert(pageContract.footerCopyrightCount === 1, `Expected one footer copyright sibling: ${JSON.stringify(pageContract)}`)
   assert(pageContract.footerCopyright === EXPECTED_FOOTER_COPYRIGHT, `Unexpected footer copyright: ${JSON.stringify(pageContract)}`)
-  assert(pageContract.footerLinks.length === EXPECTED_FOOTER_LINKS.length, `Unexpected footer link count: ${JSON.stringify(pageContract.footerLinks)}`)
+  assert(pageContract.footerLinks.length === expectedFooterLinks.length, `Unexpected footer link count: ${JSON.stringify(pageContract.footerLinks)}`)
   assert(pageContract.externalAnchorCount === 2, `Expected exactly two external anchors: ${JSON.stringify(pageContract)}`)
   assert(pageContract.footerExternalAnchorCount === pageContract.externalAnchorCount, `Expected every external anchor to be in the footer: ${JSON.stringify(pageContract)}`)
   assert(pageContract.externalAnchorOutsideFooterCount === 0, `Found an external anchor outside the footer: ${JSON.stringify(pageContract)}`)
 
-  EXPECTED_FOOTER_LINKS.forEach((expectedLink, index) => {
+  expectedFooterLinks.forEach((expectedLink, index) => {
     const link = pageContract.footerLinks[index]
     assert(link, `Missing footer link at index ${index}: ${expectedLink.rawHref}`)
     assert(link.rawHref === expectedLink.rawHref, `Unexpected raw footer href at index ${index}: ${JSON.stringify(link)}`)
@@ -599,6 +826,89 @@ async function assertPublicMetadataAndFooter(cdp, sessionId) {
       assert(link.target !== '_blank', `Hub footer link must stay in the same tab: ${JSON.stringify(link)}`)
     }
   })
+}
+
+async function runStaticContentRegression({ basePath, cdp, origin, pageUrl }) {
+  const target = await cdp.send('Target.createTarget', { url: 'about:blank' })
+  const targetId = target.targetId
+  let sessionId
+  try {
+    const attached = await cdp.send('Target.attachToTarget', { flatten: true, targetId })
+    sessionId = attached.sessionId
+    await cdp.send('Page.enable', {}, sessionId)
+    await cdp.send('Runtime.enable', {}, sessionId)
+    await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
+    await cdp.send('Emulation.setScriptExecutionDisabled', { value: true }, sessionId)
+
+    await cdp.send('Page.navigate', { url: pageUrl }, sessionId)
+    await waitForDom(cdp, sessionId, `document.readyState === 'complete' && document.querySelector('.static-content') !== null`, 'the static app content with scripts disabled')
+    const appState = await evaluate(cdp, sessionId, `(() => {
+      const isVisible = (element) => {
+        if (!(element instanceof HTMLElement)) return false
+        const rect = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight && style.display !== 'none' && style.visibility !== 'hidden'
+      }
+      const section = document.querySelector('.static-content')
+      const heading = section?.querySelector('#static-content-title')
+      const guideAnchor = section?.querySelector('a[href$="guide.html"]')
+      return {
+        guideAnchorHref: guideAnchor?.href ?? '',
+        guideAnchorText: guideAnchor?.textContent?.trim() ?? '',
+        guideAnchorVisible: isVisible(guideAnchor),
+        headingText: heading?.textContent?.trim() ?? '',
+        sectionVisible: isVisible(section),
+      }
+    })()`)
+    assert(appState.sectionVisible && appState.headingText === 'ブラウザ内で画像を整える', `Static app section is not visible with scripts disabled: ${JSON.stringify(appState)}`)
+    assert(appState.guideAnchorVisible && appState.guideAnchorText === '使い方ガイド' && appState.guideAnchorHref === `${origin}${basePath}guide.html`, `Static guide anchor is not visible or does not resolve under BASE_PATH: ${JSON.stringify(appState)}`)
+    await captureScreenshot(cdp, sessionId, 'no-js-app-mobile.png')
+
+    await cdp.send('Page.navigate', { url: `${origin}${basePath}guide.html` }, sessionId)
+    await waitForDom(cdp, sessionId, `document.readyState === 'complete' && document.querySelector('h1')?.textContent?.trim() === '画像圧縮・編集の使い方' && document.querySelector('#faq-title') !== null`, 'the static guide with scripts disabled')
+    const guideState = await evaluate(cdp, sessionId, `(() => {
+      const isVisible = (element) => {
+        if (!(element instanceof HTMLElement)) return false
+        const rect = element.getBoundingClientRect()
+        const style = getComputedStyle(element)
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'
+      }
+      const documentElement = document.documentElement
+      const body = document.body
+      const heading = document.querySelector('h1')
+      const faqHeading = document.querySelector('#faq-title')
+      const faqSummary = document.querySelector('#faq-title')?.parentElement?.querySelector('summary')
+      return {
+        faqHeadingText: faqHeading?.textContent?.trim() ?? '',
+        faqHeadingVisible: isVisible(faqHeading),
+        faqSummaryText: faqSummary?.textContent?.trim() ?? '',
+        faqSummaryVisible: isVisible(faqSummary),
+        headingText: heading?.textContent?.trim() ?? '',
+        headingVisible: isVisible(heading),
+        horizontalScrollWidth: Math.max(documentElement.scrollWidth, body?.scrollWidth ?? 0),
+        viewportWidth: window.innerWidth,
+        viewportClientWidth: documentElement.clientWidth,
+      }
+    })()`)
+    assert(guideState.headingVisible && guideState.headingText === '画像圧縮・編集の使い方', `Static guide heading is not readable with scripts disabled: ${JSON.stringify(guideState)}`)
+    assert(guideState.faqHeadingVisible && guideState.faqHeadingText === 'よくある質問' && guideState.faqSummaryVisible && guideState.faqSummaryText.length > 0, `Static guide FAQ is not readable with scripts disabled: ${JSON.stringify(guideState)}`)
+    assert(guideState.viewportWidth === MOBILE_VIEWPORT.width && guideState.horizontalScrollWidth <= guideState.viewportClientWidth + 1, `Static guide overflows horizontally at mobile width: ${JSON.stringify(guideState)}`)
+    await captureScreenshot(cdp, sessionId, 'no-js-guide-mobile.png')
+    return { app: appState, guide: guideState }
+  } finally {
+    if (sessionId) {
+      try {
+        await cdp.send('Emulation.setScriptExecutionDisabled', { value: false }, sessionId)
+      } catch {
+        // The isolated target may already be gone after a failed navigation.
+      }
+    }
+    try {
+      await cdp.send('Target.closeTarget', { targetId })
+    } catch {
+      // Chrome may already have exited after a failed test.
+    }
+  }
 }
 
 async function clickButton(cdp, sessionId, text) {
@@ -636,6 +946,56 @@ async function setFileInput(cdp, sessionId, filePath) {
   }, sessionId)
   assert(queryResult.nodeId, 'The real file input was not found.')
   await cdp.send('DOM.setFileInputFiles', { files: [filePath], nodeId: queryResult.nodeId }, sessionId)
+}
+
+async function dispatchFileDrop(cdp, sessionId, selector, filePath, filename = basename(filePath)) {
+  const encodedFile = (await readFile(filePath)).toString('base64')
+  const quotedSelector = JSON.stringify(selector)
+  const quotedFilename = JSON.stringify(filename)
+  const quotedEncodedFile = JSON.stringify(encodedFile)
+
+  await evaluate(cdp, sessionId, `(() => {
+    const target = document.querySelector(${quotedSelector})
+    if (!(target instanceof HTMLElement)) throw new Error('Drop target not found: ' + ${quotedSelector})
+    const bytes = Uint8Array.from(atob(${quotedEncodedFile}), (character) => character.charCodeAt(0))
+    const file = new File([bytes], ${quotedFilename}, { type: 'image/jpeg' })
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(file)
+    target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer }))
+  })()`)
+  await waitForDom(cdp, sessionId, `document.querySelector(${quotedSelector})?.classList.contains('is-dragging') === true`, `drag-over feedback for ${selector}`)
+
+  await evaluate(cdp, sessionId, `(() => {
+    const target = document.querySelector(${quotedSelector})
+    if (!(target instanceof HTMLElement)) throw new Error('Drop target not found: ' + ${quotedSelector})
+    target.dispatchEvent(new DragEvent('dragleave', { bubbles: true, cancelable: true }))
+  })()`)
+  await waitForDom(cdp, sessionId, `document.querySelector(${quotedSelector})?.classList.contains('is-dragging') === false`, `drag-leave feedback for ${selector}`)
+
+  await evaluate(cdp, sessionId, `(() => {
+    const target = document.querySelector(${quotedSelector})
+    if (!(target instanceof HTMLElement)) throw new Error('Drop target not found: ' + ${quotedSelector})
+    const bytes = Uint8Array.from(atob(${quotedEncodedFile}), (character) => character.charCodeAt(0))
+    const file = new File([bytes], ${quotedFilename}, { type: 'image/jpeg' })
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(file)
+    target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer }))
+  })()`)
+  await waitForDom(cdp, sessionId, `document.querySelector(${quotedSelector})?.classList.contains('is-dragging') === true`, `drag-over reactivation for ${selector}`)
+
+  await evaluate(cdp, sessionId, `(() => {
+    const target = document.querySelector(${quotedSelector})
+    if (!(target instanceof HTMLElement)) throw new Error('Drop target not found: ' + ${quotedSelector})
+    const bytes = Uint8Array.from(atob(${quotedEncodedFile}), (character) => character.charCodeAt(0))
+    const file = new File([bytes], ${quotedFilename}, { type: 'image/jpeg' })
+    const dataTransfer = new DataTransfer()
+    dataTransfer.items.add(file)
+    target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }))
+  })()`)
+  await waitForDom(cdp, sessionId, `(() => {
+    const target = document.querySelector(${quotedSelector})
+    return target === null || !target.classList.contains('is-dragging')
+  })()`, `drop feedback clear for ${selector}`)
 }
 
 async function getTargetInfo(cdp, targetId) {
@@ -834,6 +1194,7 @@ async function capturePixelEvidence(cdp, sessionId) {
 async function runScenario({ allowedPaths, basePath, downloadDirectory, fixturePath, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
+  const screenshots = {}
 
   await cdp.send('Network.enable', {}, sessionId)
   await cdp.send('Runtime.enable', {}, sessionId)
@@ -844,13 +1205,43 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
     window.addEventListener('unhandledrejection', (event) => console.error('[e2e] unhandled rejection', event.reason?.stack || String(event.reason)))
   })()`)
 
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
   await cdp.send('Page.navigate', { url: pageUrl }, sessionId)
   await waitForDom(cdp, sessionId, `document.readyState === 'complete' && document.querySelector('input[type="file"]') !== null`, 'the built app to load')
-  await assertPublicMetadataAndFooter(cdp, sessionId)
-  await setFileInput(cdp, sessionId, fixturePath)
+  await assertPublicMetadataAndFooter(cdp, sessionId, basePath)
+  await assertEmptyFirstView(cdp, sessionId, DESKTOP_VIEWPORT, 'desktop')
+  screenshots.emptyDesktop = await captureScreenshot(cdp, sessionId, 'empty-desktop.png')
+  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the empty mobile viewport')
+  await assertEmptyFirstView(cdp, sessionId, MOBILE_VIEWPORT, 'mobile')
+  screenshots.emptyMobile = await captureScreenshot(cdp, sessionId, 'empty-mobile.png')
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport before initial drop')
+  await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
   await waitForFileLoad(cdp, sessionId)
   await waitForDom(cdp, sessionId, `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === '16 × 32 px'`, 'the normalized source dimensions')
   await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the initial Worker preview')
+  await assertLoadedFirstView(cdp, sessionId, DESKTOP_VIEWPORT, 'desktop')
+  screenshots.loadedDesktop = await captureScreenshot(cdp, sessionId, 'loaded-desktop.png')
+  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the mobile viewport')
+  await assertLoadedFirstView(cdp, sessionId, MOBILE_VIEWPORT, 'mobile')
+  screenshots.loadedMobile = await captureScreenshot(cdp, sessionId, 'loaded-mobile.png')
+  const stageSrcBeforeNativeSelection = await evaluate(cdp, sessionId, "document.querySelector('.stage-image')?.src ?? ''")
+  await setFileInput(cdp, sessionId, fixturePath)
+  await waitForDom(cdp, sessionId, `(() => {
+    const sourceImage = document.querySelector('.stage-image')
+    return typeof sourceImage?.src === 'string' && sourceImage.src.length > 0 && sourceImage.src !== ${JSON.stringify(stageSrcBeforeNativeSelection)}
+  })()`, 'the native file input to replace the stage image')
+  await waitForFileLoad(cdp, sessionId)
+  await waitForDom(cdp, sessionId, `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === '16 × 32 px'`, 'the native file input source dimensions')
+  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the initial Worker preview after native file selection')
+  await dispatchFileDrop(cdp, sessionId, '.change-image-button', fixturePath, 'e2e-metadata-fixture-replacement.jpg')
+  await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.alt === 'e2e-metadata-fixture-replacement.jpg の編集対象'`, 'the loaded change-image drop replacement')
+  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the replacement Worker preview')
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after mobile layout checks')
+  await openDetails(cdp, sessionId, '.advanced-controls')
 
   const initialLayout = await evaluate(cdp, sessionId, `(() => {
     const surface = document.querySelector('.crop-surface')
@@ -864,14 +1255,14 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
       surfaceHeight: rect?.height,
       surfaceRatio: rect ? rect.width / rect.height : undefined,
       surfaceWidth: rect?.width,
-      heightCapPx: rootFontSize * 42,
+      heightCapPx: 320,
       rootFontSize,
     }
   })()`)
   assert(initialLayout.sourceDimensions === '16 × 32 px', `App source dimensions were not normalized: ${JSON.stringify(initialLayout)}`)
   assert(initialLayout.sourceNaturalWidth === 16 && initialLayout.sourceNaturalHeight === 32, `Source img natural dimensions were not normalized: ${JSON.stringify(initialLayout)}`)
   assert(Math.abs(initialLayout.surfaceRatio - 0.5) <= 0.01, `Portrait crop surface ratio was not preserved: ${JSON.stringify(initialLayout)}`)
-  assert(initialLayout.surfaceHeight <= initialLayout.heightCapPx + 1, `Crop surface exceeded the 42rem height cap: ${JSON.stringify(initialLayout)}`)
+  assert(initialLayout.surfaceHeight <= initialLayout.heightCapPx + 1, `Desktop crop surface exceeded the useful height cap: ${JSON.stringify(initialLayout)}`)
 
   await setControlValue(cdp, sessionId, '#aspect-ratio', '1:1')
   await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === '1:1'`, 'the 1:1 preset')
@@ -967,7 +1358,7 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
     downloadPath: downloadDirectory,
   })
   await clickButton(cdp, sessionId, 'ダウンロード')
-  const downloadedFilename = 'e2e-metadata-fixture-edited.jpg'
+  const downloadedFilename = 'e2e-metadata-fixture-replacement-edited.jpg'
   const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
   const outputBytes = new Uint8Array(await readFile(downloadedPath))
   const outputDimensions = parseJpegDimensions(outputBytes)
@@ -998,6 +1389,7 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
         intermediate: { actual: intermediateError, wrongMapping: intermediateWrongError },
       },
     },
+    screenshots,
     serverRequests: [...requestLog],
   }
 }
@@ -1059,6 +1451,12 @@ async function main() {
       sourceFamilies,
       sourceOrientation,
       targetId: pageTargetId,
+    })
+    report.staticContentRegression = await runStaticContentRegression({
+      basePath,
+      cdp,
+      origin: staticServer.origin,
+      pageUrl: staticServer.pageUrl,
     })
     console.log(JSON.stringify({ basePath, ...report }, null, 2))
     console.log('Chromium E2E: PASS')

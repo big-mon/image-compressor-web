@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
+import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 import { isSameResultIntent, type ResultIntent } from './app-async'
 import {
@@ -53,6 +53,11 @@ interface SourceAsset {
 }
 
 type CropInteractionMode = 'move' | 'resize'
+
+type CropSurfaceStyle = CSSProperties & {
+  readonly '--crop-stage-desktop-width': string
+  readonly '--crop-stage-mobile-width': string
+}
 
 interface CropInteraction {
   readonly pointerId: number
@@ -299,6 +304,15 @@ function App() {
   const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     void handleFile(event.target.files?.[0])
     event.target.value = ''
+  }
+
+  const handleDragOver = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    setDragging(true)
+  }
+
+  const handleDragLeave = () => {
+    setDragging(false)
   }
 
   const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
@@ -603,225 +617,262 @@ function App() {
         transform: createStageTransform(editState.rotation, editState.flipHorizontal, editState.flipVertical),
       }
     : undefined
-  const cropSurfaceStyle = geometry ? createCropSurfaceStyle(geometry.displaySize) : undefined
+  const cropSurfaceStyle: CropSurfaceStyle | undefined = geometry
+    ? {
+        ...createCropSurfaceStyle(geometry.displaySize),
+        maxWidth: undefined,
+        '--crop-stage-desktop-width': `${Math.min(320, 320 * geometry.displaySize.width / geometry.displaySize.height)}px`,
+        '--crop-stage-mobile-width': `${Math.min(200, 200 * geometry.displaySize.width / geometry.displaySize.height)}px`,
+      }
+    : undefined
 
   return (
     <>
       <main className="shell">
-        <header className="hero">
-          <p className="eyebrow">image-compressor-web</p>
-          <h1>画像を、ブラウザの中だけで整える。</h1>
-          <p className="lead">
-            選んだ画像をここでトリミング、回転、反転、リサイズして、必要な形式で保存できます。画像データは外部へ送信しません。
-          </p>
-        </header>
-
-        <section className="privacy-card" aria-label="プライバシー情報">
-          <span className="privacy-icon" aria-hidden="true">◎</span>
-          <p>
-            すべての処理はこのブラウザ内で完結します。ピクセルにデコードしてから再エンコードするため、出力画像のメタデータは削除されます。JPEGの回転もロスレス変換ではなく再エンコードです。
-          </p>
-        </section>
-
-        <label
-          className={`drop-zone${dragging ? ' is-dragging' : ''}`}
-          onDragOver={(event) => {
-            event.preventDefault()
-            setDragging(true)
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-        >
+        <header className="tool-toolbar">
+          <div className="toolbar-copy">
+            <h1>画像を圧縮・編集</h1>
+            <p className="tool-reassurance">画像のアップロードなし</p>
+          </div>
           <input
+            id="image-input"
             className="visually-hidden"
             type="file"
             accept="image/jpeg,image/png,image/webp"
+            tabIndex={-1}
+            aria-label="画像ファイルを選択"
             onChange={handleInputChange}
           />
-          <span className="drop-title">JPEG・PNG・WebPを選ぶ</span>
-          <span className="drop-detail">クリックまたはドラッグ＆ドロップ。静止画のみ対応。</span>
-        </label>
+          {asset ? (
+            <label
+              className={`change-image-button${dragging ? ' is-dragging' : ''}`}
+              htmlFor="image-input"
+              role="button"
+              tabIndex={0}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  document.getElementById('image-input')?.click()
+                }
+              }}
+            >
+              画像を変更
+            </label>
+          ) : null}
+        </header>
 
         {asset && editState && geometry ? (
           <>
             <section className="workspace" aria-label="画像エディター">
-            <div className="editor-column">
-              <div className="section-heading">
-                <div>
-                  <p className="section-kicker">EDITOR</p>
-                  <h2>切り抜きと見え方</h2>
-                </div>
-                <span className={`status-chip${busy ? ' is-busy' : ''}`} role="status" aria-live="polite">
-                  {busy ? '処理中…' : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
-                </span>
-              </div>
-
-              <div
-                ref={cropSurfaceRef}
-                className="crop-surface"
-                style={cropSurfaceStyle}
-                onPointerMove={moveCropInteraction}
-                onPointerUp={endCropInteraction}
-                onPointerCancel={endCropInteraction}
-              >
-                <img
-                  className="stage-image"
-                  src={asset.objectUrl}
-                  alt={`${asset.file.name} の編集対象`}
-                  draggable={false}
-                  style={stageImageStyle}
-                />
-                <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
-                <div className="crop-shade crop-shade-bottom" style={{ height: cropStyle ? `${100 - Number.parseFloat(cropStyle.top) - Number.parseFloat(cropStyle.height)}%` : undefined }} />
-                <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
-                <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: cropStyle ? `${100 - Number.parseFloat(cropStyle.left) - Number.parseFloat(cropStyle.width)}%` : undefined, height: cropStyle?.height }} />
-                <div
-                  className="crop-rectangle"
-                  style={cropStyle}
-                  role="group"
-                  tabIndex={0}
-                  aria-label="切り抜き範囲。矢印キーで移動、Shiftで大きく移動"
-                  onKeyDown={moveCropWithKeyboard}
-                  onPointerDown={(event) => beginCropInteraction(event, 'move')}
-                >
-                  <span className="crop-grid" aria-hidden="true" />
-                  <button
-                    className="crop-handle"
-                    type="button"
-                    aria-label="切り抜き範囲をリサイズ"
-                    onPointerDown={(event) => beginCropInteraction(event, 'resize')}
-                  />
-                </div>
-              </div>
-
-              <div className="crop-coordinates" aria-label="切り抜き数値 controls">
-                <label>
-                  X
-                  <input type="number" min="0" step="1" value={Math.round(currentCrop.x)} onChange={(event) => updateCropField('x', event.currentTarget.valueAsNumber)} />
-                </label>
-                <label>
-                  Y
-                  <input type="number" min="0" step="1" value={Math.round(currentCrop.y)} onChange={(event) => updateCropField('y', event.currentTarget.valueAsNumber)} />
-                </label>
-                <label>
-                  幅
-                  <input type="number" min="1" step="1" value={Math.round(currentCrop.width)} onChange={(event) => updateCropField('width', event.currentTarget.valueAsNumber)} />
-                </label>
-                <label>
-                  高さ
-                  <input type="number" min="1" step="1" value={Math.round(currentCrop.height)} onChange={(event) => updateCropField('height', event.currentTarget.valueAsNumber)} />
-                </label>
-              </div>
-
-              <div className="control-card">
-                <div className="control-row">
-                  <label htmlFor="aspect-ratio">アスペクト比</label>
-                  <select id="aspect-ratio" value={editState.aspectRatio} onChange={(event) => setAspectRatio(event.target.value as AspectRatioPreset)}>
-                    {ASPECT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                </div>
-                <div className="range-control">
-                  <div className="range-label"><label htmlFor="zoom">ズーム</label><output htmlFor="zoom">{(editState.zoom ?? 1).toFixed(2)}×</output></div>
-                  <input id="zoom" type="range" min="1" max="8" step="0.01" value={editState.zoom ?? 1} onChange={(event) => updateEditState((current) => ({ ...current, zoom: Number(event.target.value) }))} />
-                </div>
-                <div className="range-control">
-                  <div className="range-label"><label htmlFor="pan-x">パン X</label><output htmlFor="pan-x">{(editState.panX ?? 0).toFixed(2)}</output></div>
-                  <input id="pan-x" type="range" min="-1" max="1" step="0.01" value={editState.panX ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panX: Number(event.target.value) }))} />
-                </div>
-                <div className="range-control">
-                  <div className="range-label"><label htmlFor="pan-y">パン Y</label><output htmlFor="pan-y">{(editState.panY ?? 0).toFixed(2)}</output></div>
-                  <input id="pan-y" type="range" min="-1" max="1" step="0.01" value={editState.panY ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panY: Number(event.target.value) }))} />
-                </div>
-                <p className="control-hint">画像上の範囲をドラッグするか、数値・スライダーで同じ操作ができます。</p>
-              </div>
-
-              <div className="button-row">
-                <button type="button" className="secondary-button" onClick={() => rotateBy(-90)}>↺ 左へ90°</button>
-                <button type="button" className="secondary-button" onClick={() => rotateBy(90)}>↻ 右へ90°</button>
-                <button type="button" className={`secondary-button${editState.flipHorizontal ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipHorizontal: !current.flipHorizontal }))}>↔ 左右反転</button>
-                <button type="button" className={`secondary-button${editState.flipVertical ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipVertical: !current.flipVertical }))}>↕ 上下反転</button>
-                <button type="button" className="text-button" onClick={resetEdits}>編集をリセット</button>
-              </div>
-            </div>
-
-            <aside className="settings-column" aria-label="出力設定">
-              <div className="section-heading compact-heading">
-                <div>
-                  <p className="section-kicker">OUTPUT</p>
-                  <h2>保存設定</h2>
-                </div>
-              </div>
-              <div className="control-card output-card">
-                <label className="field-label" htmlFor="output-format">形式</label>
-                <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
-                  {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-
-                {outputMime === 'image/png' ? null : (
-                  <div className="range-control quality-control">
-                    <div className="range-label"><label htmlFor="quality">品質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
-                    <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
-                    <span className="field-help">JPEG・WebPのみ</span>
+              <div className="editor-column">
+                <div className="section-heading">
+                  <div>
+                    <p className="section-kicker">EDITOR</p>
+                    <h2>切り抜きと見え方</h2>
                   </div>
-                )}
+                  <span className={`status-chip${busy ? ' is-busy' : ''}`} role="status" aria-live="polite">
+                    {busy ? '処理中…' : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
+                  </span>
+                </div>
 
-                <div className="resize-fields">
-                  <div className="field-label-row"><span className="field-label">出力サイズ</span><span className="field-help">幅または高さ</span></div>
-                  <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
-                  <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
+                <div
+                  ref={cropSurfaceRef}
+                  className="crop-surface"
+                  style={cropSurfaceStyle}
+                  onPointerMove={moveCropInteraction}
+                  onPointerUp={endCropInteraction}
+                  onPointerCancel={endCropInteraction}
+                >
+                  <img
+                    className="stage-image"
+                    src={asset.objectUrl}
+                    alt={`${asset.file.name} の編集対象`}
+                    draggable={false}
+                    style={stageImageStyle}
+                  />
+                  <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
+                  <div className="crop-shade crop-shade-bottom" style={{ height: cropStyle ? `${100 - Number.parseFloat(cropStyle.top) - Number.parseFloat(cropStyle.height)}%` : undefined }} />
+                  <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
+                  <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: cropStyle ? `${100 - Number.parseFloat(cropStyle.left) - Number.parseFloat(cropStyle.width)}%` : undefined, height: cropStyle?.height }} />
+                  <div
+                    className="crop-rectangle"
+                    style={cropStyle}
+                    role="group"
+                    tabIndex={0}
+                    aria-label="切り抜き範囲。矢印キーで移動、Shiftで大きく移動"
+                    onKeyDown={moveCropWithKeyboard}
+                    onPointerDown={(event) => beginCropInteraction(event, 'move')}
+                  >
+                    <span className="crop-grid" aria-hidden="true" />
+                    <button
+                      className="crop-handle"
+                      type="button"
+                      aria-label="切り抜き範囲をリサイズ"
+                      onPointerDown={(event) => beginCropInteraction(event, 'resize')}
+                    />
+                  </div>
                 </div>
-                <div className="effective-size">
-                  <span>有効な出力寸法</span>
-                  <strong>{formatDimensions(geometry.outputSize)}</strong>
+
+                <div className="button-row editor-actions">
+                  <button type="button" className="secondary-button" onClick={() => rotateBy(-90)}>↺ 左へ90°</button>
+                  <button type="button" className="secondary-button" onClick={() => rotateBy(90)}>↻ 右へ90°</button>
+                  <button type="button" className={`secondary-button${editState.flipHorizontal ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipHorizontal: !current.flipHorizontal }))}>↔ 左右反転</button>
+                  <button type="button" className={`secondary-button${editState.flipVertical ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipVertical: !current.flipVertical }))}>↕ 上下反転</button>
+                  <button type="button" className="text-button" onClick={resetEdits}>編集をリセット</button>
                 </div>
+
+                <section className="comparison-section" aria-labelledby="comparison-title">
+                  <div className="section-heading">
+                    <div>
+                      <p className="section-kicker">PREVIEW</p>
+                      <h2 id="comparison-title">変換前と変換後</h2>
+                    </div>
+                    <span className="comparison-note">プレビュー</span>
+                  </div>
+                  <div className="comparison-grid">
+                    <figure className="comparison-card">
+                      <figcaption><span>元画像</span><span>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</span></figcaption>
+                      <div className="comparison-media"><img src={asset.objectUrl} alt="変換前の元画像" /></div>
+                    </figure>
+                    <figure className="comparison-card after-card">
+                      <figcaption><span>{renderedIsPreview ? '変換後プレビュー' : '変換後'}</span><span>{renderedResult ? formatDimensions({ width: renderedResult.width, height: renderedResult.height }) : '生成中'}</span></figcaption>
+                      <div className="comparison-media">
+                        {renderedUrl ? <img src={renderedUrl} alt="変換後の画像プレビュー" /> : <span className="empty-preview">プレビューを生成しています…</span>}
+                      </div>
+                    </figure>
+                  </div>
+                </section>
               </div>
 
-              <div className="metrics-card" aria-label="画像メトリクス">
-                <div className="metric-line"><span>元画像</span><strong>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</strong></div>
-                <div className="metric-line"><span>元の容量</span><strong>{formatBytes(asset.file.size)}</strong></div>
-                <div className="metric-line"><span>{renderedIsPreview ? '出力プレビュー' : '出力画像'}</span><strong>{metrics ? formatDimensions({ width: metrics.outputWidth, height: metrics.outputHeight }) : '—'}</strong></div>
-                <div className="metric-line"><span>出力容量</span><strong>{metrics ? formatBytes(metrics.outputBytes) : '—'}</strong></div>
-                <div className="reduction-line"><span>容量の変化</span><strong>{metrics ? `${metrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(metrics.reductionPercent).toFixed(1)}%` : '—'}</strong></div>
-              </div>
+              <aside className="settings-column" aria-label="出力設定">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <p className="section-kicker">OUTPUT</p>
+                    <h2>保存設定</h2>
+                  </div>
+                </div>
+                <div className="control-card output-card">
+                  <label className="field-label" htmlFor="output-format">形式</label>
+                  <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
+                    {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
 
-              <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>
-                ダウンロード .{getOutputExtension(outputMime)}
-              </button>
-              <p className="download-hint">ファイル名は安全な形に整えて保存します。</p>
-            </aside>
+                  {outputMime === 'image/png' ? null : (
+                    <div className="range-control quality-control">
+                      <div className="range-label"><label htmlFor="quality">品質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
+                      <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
+                      <span className="field-help">JPEG・WebPのみ</span>
+                    </div>
+                  )}
+
+                  <div className="resize-fields">
+                    <div className="field-label-row"><span className="field-label">出力サイズ</span><span className="field-help">幅または高さ</span></div>
+                    <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
+                    <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
+                  </div>
+                  <div className="effective-size">
+                    <span>有効な出力寸法</span>
+                    <strong>{formatDimensions(geometry.outputSize)}</strong>
+                  </div>
+                </div>
+
+                <div className="metrics-card" aria-label="画像メトリクス">
+                  <div className="metric-line"><span>元画像</span><strong>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</strong></div>
+                  <div className="metric-line"><span>元の容量</span><strong>{formatBytes(asset.file.size)}</strong></div>
+                  <div className="metric-line"><span>{renderedIsPreview ? '出力プレビュー' : '出力画像'}</span><strong>{metrics ? formatDimensions({ width: metrics.outputWidth, height: metrics.outputHeight }) : '—'}</strong></div>
+                  <div className="metric-line"><span>出力容量</span><strong>{metrics ? formatBytes(metrics.outputBytes) : '—'}</strong></div>
+                  <div className="reduction-line"><span>容量の変化</span><strong>{metrics ? `${metrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(metrics.reductionPercent).toFixed(1)}%` : '—'}</strong></div>
+                </div>
+
+                <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>
+                  ダウンロード .{getOutputExtension(outputMime)}
+                </button>
+                <p className="download-hint">ファイル名は安全な形に整えて保存します。</p>
+              </aside>
             </section>
 
-            <section className="comparison-section" aria-labelledby="comparison-title">
-            <div className="section-heading">
-              <div>
-                <p className="section-kicker">COMPARE</p>
-                <h2 id="comparison-title">変換前と変換後</h2>
-              </div>
-              <span className="comparison-note">Worker生成プレビュー</span>
-            </div>
-            <div className="comparison-grid">
-              <figure className="comparison-card">
-                <figcaption><span>元画像</span><span>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</span></figcaption>
-                <div className="comparison-media"><img src={asset.objectUrl} alt="変換前の元画像" /></div>
-              </figure>
-              <figure className="comparison-card after-card">
-                <figcaption><span>{renderedIsPreview ? '変換後プレビュー' : '変換後'}</span><span>{renderedResult ? formatDimensions({ width: renderedResult.width, height: renderedResult.height }) : '生成中'}</span></figcaption>
-                <div className="comparison-media">
-                  {renderedUrl ? <img src={renderedUrl} alt="変換後の画像プレビュー" /> : <span className="empty-preview">プレビューを生成しています…</span>}
+            <details className="advanced-controls">
+              <summary>詳細な切り抜き・位置調整</summary>
+              <div className="advanced-controls-body">
+                <div className="crop-coordinates" aria-label="切り抜き数値 controls">
+                  <label>
+                    X
+                    <input type="number" min="0" step="1" value={Math.round(currentCrop.x)} onChange={(event) => updateCropField('x', event.currentTarget.valueAsNumber)} />
+                  </label>
+                  <label>
+                    Y
+                    <input type="number" min="0" step="1" value={Math.round(currentCrop.y)} onChange={(event) => updateCropField('y', event.currentTarget.valueAsNumber)} />
+                  </label>
+                  <label>
+                    幅
+                    <input type="number" min="1" step="1" value={Math.round(currentCrop.width)} onChange={(event) => updateCropField('width', event.currentTarget.valueAsNumber)} />
+                  </label>
+                  <label>
+                    高さ
+                    <input type="number" min="1" step="1" value={Math.round(currentCrop.height)} onChange={(event) => updateCropField('height', event.currentTarget.valueAsNumber)} />
+                  </label>
                 </div>
-              </figure>
-            </div>
-            </section>
+
+                <div className="control-card">
+                  <div className="control-row">
+                    <label htmlFor="aspect-ratio">アスペクト比</label>
+                    <select id="aspect-ratio" value={editState.aspectRatio} onChange={(event) => setAspectRatio(event.target.value as AspectRatioPreset)}>
+                      {ASPECT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="range-control">
+                    <div className="range-label"><label htmlFor="zoom">ズーム</label><output htmlFor="zoom">{(editState.zoom ?? 1).toFixed(2)}×</output></div>
+                    <input id="zoom" type="range" min="1" max="8" step="0.01" value={editState.zoom ?? 1} onChange={(event) => updateEditState((current) => ({ ...current, zoom: Number(event.target.value) }))} />
+                  </div>
+                  <div className="range-control">
+                    <div className="range-label"><label htmlFor="pan-x">パン X</label><output htmlFor="pan-x">{(editState.panX ?? 0).toFixed(2)}</output></div>
+                    <input id="pan-x" type="range" min="-1" max="1" step="0.01" value={editState.panX ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panX: Number(event.target.value) }))} />
+                  </div>
+                  <div className="range-control">
+                    <div className="range-label"><label htmlFor="pan-y">パン Y</label><output htmlFor="pan-y">{(editState.panY ?? 0).toFixed(2)}</output></div>
+                    <input id="pan-y" type="range" min="-1" max="1" step="0.01" value={editState.panY ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panY: Number(event.target.value) }))} />
+                  </div>
+                  <p className="control-hint">画像上の範囲をドラッグするか、数値・スライダーで同じ操作ができます。</p>
+                </div>
+
+              </div>
+            </details>
           </>
         ) : (
-          <section className="empty-state" aria-label="画像未選択">
-            <p className="empty-number">01</p>
-            <h2>まず画像を選択してください。</h2>
-            <p>選択後すぐに、切り抜き範囲・ズーム・回転・出力形式を操作できます。</p>
-          </section>
+          <label
+            className={`drop-zone${dragging ? ' is-dragging' : ''}`}
+            htmlFor="image-input"
+            role="button"
+            tabIndex={0}
+            aria-controls="image-input"
+            aria-describedby="drop-detail"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                document.getElementById('image-input')?.click()
+              }
+            }}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <span className="drop-icon" aria-hidden="true">＋</span>
+            <span className="drop-title">画像を選択またはドロップ</span>
+            <span id="drop-detail" className="drop-detail">JPEG・PNG・WebPの静止画に対応</span>
+          </label>
         )}
 
         {errorMessage ? <p className="error-message" role="alert">{errorMessage}</p> : null}
+
+        <details className="privacy-details">
+          <summary>処理とプライバシーについて</summary>
+          <div className="privacy-details-body">
+            <p>すべての処理はこのブラウザ内で完結します。ピクセルにデコードしてから再エンコードするため、出力画像のメタデータは削除されます。JPEGの回転もロスレス変換ではなく再エンコードです。</p>
+          </div>
+        </details>
       </main>
 
       <footer className="site-footer">
@@ -830,6 +881,7 @@ function App() {
             <a href="/">App Hubへ戻る</a>
             <a href="https://x.com/big_mon" target="_blank" rel="noopener noreferrer">X @big_mon</a>
             <a href="https://github.com/big-mon/image-compressor-web" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <a href={`${import.meta.env.BASE_URL}guide.html`}>使い方ガイド</a>
           </nav>
           <span>© 2026 image-compressor-web</span>
         </div>
