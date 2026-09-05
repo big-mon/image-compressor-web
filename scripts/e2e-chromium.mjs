@@ -1031,6 +1031,255 @@ async function setControlValue(cdp, sessionId, selector, value) {
   })()`)
 }
 
+async function dragCropRectangle(cdp, sessionId, direction) {
+  const points = await evaluate(cdp, sessionId, `(() => {
+    const surface = document.querySelector('.crop-surface')
+    const crop = document.querySelector('.crop-rectangle')
+    if (!(surface instanceof HTMLElement) || !(crop instanceof HTMLElement)) {
+      throw new Error('Crop surface or crop rectangle is missing.')
+    }
+    const surfaceRect = surface.getBoundingClientRect()
+    const cropRect = crop.getBoundingClientRect()
+    const start = {
+      x: (cropRect.left + cropRect.right) / 2,
+      y: (cropRect.top + cropRect.bottom) / 2,
+    }
+    const end = ${direction === 'right-bottom'
+      ? '{ x: surfaceRect.right - 1, y: surfaceRect.bottom - 1 }'
+      : '{ x: surfaceRect.left + 1, y: surfaceRect.top + 1 }'}
+    return {
+      end,
+      midpoint: {
+        x: (start.x + end.x) / 2,
+        y: (start.y + end.y) / 2,
+      },
+      start,
+    }
+  })()`)
+
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: points.start.x,
+    y: points.start.y,
+    button: 'none',
+    buttons: 0,
+  }, sessionId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: points.start.x,
+    y: points.start.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  }, sessionId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: points.midpoint.x,
+    y: points.midpoint.y,
+    button: 'left',
+    buttons: 1,
+  }, sessionId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: points.end.x,
+    y: points.end.y,
+    button: 'left',
+    buttons: 1,
+  }, sessionId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: points.end.x,
+    y: points.end.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  }, sessionId)
+}
+
+async function setPanAndAssertCrop(cdp, sessionId, panX, panY, expectedCrop, description) {
+  const previousPreviewUrl = await evaluate(cdp, sessionId, "document.querySelector('.after-card img')?.src ?? ''")
+  await setControlValue(cdp, sessionId, '#pan-x', panX)
+  await setControlValue(cdp, sessionId, '#pan-y', panY)
+  const expectedCoordinates = [expectedCrop.x, expectedCrop.y, expectedCrop.width, expectedCrop.height].join(',')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === ${JSON.stringify(expectedCoordinates)} && document.querySelector('#pan-x')?.value === ${JSON.stringify(String(panX))} && document.querySelector('#pan-y')?.value === ${JSON.stringify(String(panY))} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.after-card img')?.src !== ${JSON.stringify(previousPreviewUrl)}`, description)
+  const pixels = await capturePixelEvidence(cdp, sessionId)
+  const pixelError = assertCropPixelEvidence(`${description} preview`, pixels)
+  assert(
+    pixels.crop.x === expectedCrop.x && pixels.crop.y === expectedCrop.y && pixels.crop.width === expectedCrop.width && pixels.crop.height === expectedCrop.height,
+    `${description} geometry was not adopted: ${JSON.stringify(pixels.crop)}`,
+  )
+  return { crop: pixels.crop, pixelError }
+}
+
+async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadDirectory, sessionId }) {
+  const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1000
+    canvas.height = 600
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Could not create a 2D canvas context for the crop drag fixture.')
+    const halfWidth = canvas.width / 2
+    const halfHeight = canvas.height / 2
+    const quadrants = [
+      ['#e63946', 0, 0, halfWidth, halfHeight],
+      ['#457b9d', halfWidth, 0, halfWidth, halfHeight],
+      ['#f4a261', 0, halfHeight, halfWidth, halfHeight],
+      ['#2a9d8f', halfWidth, halfHeight, halfWidth, halfHeight],
+    ]
+    for (const [color, x, y, width, height] of quadrants) {
+      context.fillStyle = color
+      context.fillRect(x, y, width, height)
+    }
+    return canvas.toDataURL('image/png')
+  })()`)
+  const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
+  assert(encodedFixture, 'Crop drag fixture did not encode as a PNG data URL.')
+  await writeFile(cropDragFixturePath, Buffer.from(encodedFixture, 'base64'))
+
+  await setFileInput(cdp, sessionId, cropDragFixturePath)
+  await waitForDom(cdp, sessionId, `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === '1000 × 600 px'`, 'the crop drag regression source dimensions')
+  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag regression initial preview')
+  await evaluate(cdp, sessionId, `(() => {
+    const details = document.querySelector('.advanced-controls')
+    if (!(details instanceof HTMLDetailsElement)) throw new Error('Advanced crop controls are missing.')
+    if (!details.open) details.querySelector('summary')?.click()
+    return details.open
+  })()`)
+
+  await setControlValue(cdp, sessionId, '#aspect-ratio', 'free')
+  await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === 'free'`, 'the free crop aspect ratio')
+  const cropInputSelectors = [1, 2, 3, 4].map((index) => `.crop-coordinates label:nth-child(${index}) input`)
+  await setControlValue(cdp, sessionId, cropInputSelectors[0], 0)
+  await setControlValue(cdp, sessionId, cropInputSelectors[1], 0)
+  await setControlValue(cdp, sessionId, cropInputSelectors[2], 400)
+  await setControlValue(cdp, sessionId, cropInputSelectors[3], 300)
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('.effective-size strong')?.textContent?.trim() === '400 × 300 px'`, 'the left-aligned 400 x 300 crop')
+
+  await setControlValue(cdp, sessionId, cropInputSelectors[0], 100)
+  await setControlValue(cdp, sessionId, cropInputSelectors[1], 50)
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '100,50,400,300' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0'`, 'the off-center 400 x 300 crop for pan controls')
+
+  const offCenterPanControls = {
+    bottom: await setPanAndAssertCrop(cdp, sessionId, 0, 1, { x: 100, y: 300, width: 400, height: 300 }, 'off-center bottom pan endpoint'),
+    left: await setPanAndAssertCrop(cdp, sessionId, -1, 0, { x: 0, y: 50, width: 400, height: 300 }, 'off-center left pan endpoint'),
+    intermediate: await setPanAndAssertCrop(cdp, sessionId, 0.25, -0.4, { x: 225, y: 30, width: 400, height: 300 }, 'off-center intermediate pan'),
+    neutral: await setPanAndAssertCrop(cdp, sessionId, 0, 0, { x: 100, y: 50, width: 400, height: 300 }, 'off-center neutral pan'),
+    right: await setPanAndAssertCrop(cdp, sessionId, 1, 0, { x: 600, y: 50, width: 400, height: 300 }, 'off-center right pan endpoint'),
+    top: await setPanAndAssertCrop(cdp, sessionId, 0, -1, { x: 100, y: 0, width: 400, height: 300 }, 'off-center top pan endpoint'),
+  }
+
+  await setControlValue(cdp, sessionId, '#zoom', '2')
+  const zoomedPanControls = {
+    bottom: await setPanAndAssertCrop(cdp, sessionId, 0, 1, { x: 200, y: 450, width: 200, height: 150 }, 'zoomed bottom pan endpoint'),
+    left: await setPanAndAssertCrop(cdp, sessionId, -1, 0, { x: 0, y: 125, width: 200, height: 150 }, 'zoomed left pan endpoint'),
+    intermediate: await setPanAndAssertCrop(cdp, sessionId, 0.25, -0.4, { x: 350, y: 75, width: 200, height: 150 }, 'zoomed intermediate pan'),
+    neutral: await setPanAndAssertCrop(cdp, sessionId, 0, 0, { x: 200, y: 125, width: 200, height: 150 }, 'zoomed neutral pan'),
+    right: await setPanAndAssertCrop(cdp, sessionId, 1, 0, { x: 800, y: 125, width: 200, height: 150 }, 'zoomed right pan endpoint'),
+    top: await setPanAndAssertCrop(cdp, sessionId, 0, -1, { x: 200, y: 0, width: 200, height: 150 }, 'zoomed top pan endpoint'),
+  }
+
+  await setControlValue(cdp, sessionId, '#zoom', '1')
+  await setPanAndAssertCrop(cdp, sessionId, 0, 0, { x: 100, y: 50, width: 400, height: 300 }, 'off-center neutral pan after zoom reset')
+  await setControlValue(cdp, sessionId, cropInputSelectors[0], 0)
+  await setControlValue(cdp, sessionId, cropInputSelectors[1], 0)
+  await setControlValue(cdp, sessionId, cropInputSelectors[2], 400)
+  await setControlValue(cdp, sessionId, cropInputSelectors[3], 300)
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('#zoom')?.value === '1' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0'`, 'the left-aligned crop restored before pointer dragging')
+
+  await dragCropRectangle(cdp, sessionId, 'right-bottom')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.effective-size strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag to the right and bottom bounds')
+  const rightEdgePixels = await capturePixelEvidence(cdp, sessionId)
+  const rightEdgePixelError = assertCropPixelEvidence('right-bottom crop preview', rightEdgePixels)
+  assert(rightEdgePixels.crop.x === 600 && rightEdgePixels.crop.y === 300 && rightEdgePixels.crop.width === 400 && rightEdgePixels.crop.height === 300, `Right-bottom crop geometry was not adopted: ${JSON.stringify(rightEdgePixels.crop)}`)
+  assert(rightEdgePixels.preview.width === 400 && rightEdgePixels.preview.height === 300, `Right-bottom output dimensions were unexpected: ${JSON.stringify(rightEdgePixels.preview)}`)
+  const rightEdgeScreenshot = await captureScreenshot(cdp, sessionId, 'crop-right-bound.png')
+
+  await clickButton(cdp, sessionId, 'ダウンロード')
+  const downloadedFilename = 'e2e-crop-drag-edited.jpg'
+  const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
+  const outputBytes = new Uint8Array(await readFile(downloadedPath))
+  const outputDimensions = parseJpegDimensions(outputBytes)
+  assert(outputDimensions.width === 400 && outputDimensions.height === 300, `Right-bottom downloaded output dimensions were ${outputDimensions.width}x${outputDimensions.height}, expected 400x300.`)
+
+  await dragCropRectangle(cdp, sessionId, 'left-top')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag back to the left and top bounds')
+  const leftEdgePixels = await capturePixelEvidence(cdp, sessionId)
+  const leftEdgePixelError = assertCropPixelEvidence('left-top crop preview', leftEdgePixels)
+  assert(leftEdgePixels.crop.x === 0 && leftEdgePixels.crop.y === 0 && leftEdgePixels.crop.width === 400 && leftEdgePixels.crop.height === 300, `Left-top crop geometry was not adopted after reversal: ${JSON.stringify(leftEdgePixels.crop)}`)
+  assert(leftEdgePixels.preview.width === 400 && leftEdgePixels.preview.height === 300, `Left-top output dimensions after reversal were unexpected: ${JSON.stringify(leftEdgePixels.preview)}`)
+
+  await dragCropRectangle(cdp, sessionId, 'right-bottom')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated crop drag to the right and bottom bounds')
+  const repeatedRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
+  const repeatedRightEdgePixelError = assertCropPixelEvidence('repeated right-bottom crop preview', repeatedRightEdgePixels)
+
+  await setControlValue(cdp, sessionId, cropInputSelectors[0], 100)
+  await setControlValue(cdp, sessionId, cropInputSelectors[1], 50)
+  await setControlValue(cdp, sessionId, cropInputSelectors[2], 400)
+  await setControlValue(cdp, sessionId, cropInputSelectors[3], 300)
+  await setControlValue(cdp, sessionId, '#zoom', '2')
+  await setControlValue(cdp, sessionId, '#pan-x', '0.25')
+  await setControlValue(cdp, sessionId, '#pan-y', '-0.4')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '350,75,200,150' && document.querySelector('#zoom')?.value === '2' && document.querySelector('#pan-x')?.value === '0.25' && document.querySelector('#pan-y')?.value === '-0.4' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the off-center zoomed crop before pointer dragging')
+  const zoomScreenshot = await captureScreenshot(cdp, sessionId, 'crop-zoomed-off-center.png')
+
+  await dragCropRectangle(cdp, sessionId, 'right-bottom')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('#zoom')?.value === '1' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the zoomed crop drag to the right and bottom bounds')
+  const zoomRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
+  const zoomRightEdgePixelError = assertCropPixelEvidence('zoomed right-bottom crop preview', zoomRightEdgePixels)
+
+  await dragCropRectangle(cdp, sessionId, 'left-top')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '0,0,200,150' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the reversed zoomed crop drag to the left and top bounds')
+  const zoomLeftEdgePixels = await capturePixelEvidence(cdp, sessionId)
+  const zoomLeftEdgePixelError = assertCropPixelEvidence('zoomed left-top crop preview', zoomLeftEdgePixels)
+
+  await dragCropRectangle(cdp, sessionId, 'right-bottom')
+  await waitForDom(cdp, sessionId, `[
+    ...document.querySelectorAll('.crop-coordinates input'),
+  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated zoomed crop drag to the right and bottom bounds')
+  const repeatedZoomRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
+  const repeatedZoomRightEdgePixelError = assertCropPixelEvidence('repeated zoomed right-bottom crop preview', repeatedZoomRightEdgePixels)
+
+  return {
+    leftEdge: leftEdgePixels.crop,
+    output: outputDimensions,
+    panControls: { offCenter: offCenterPanControls, zoomed: zoomedPanControls },
+    repeatedRightEdge: repeatedRightEdgePixels.crop,
+    rightEdge: rightEdgePixels.crop,
+    pixelEvidence: {
+      leftEdge: leftEdgePixelError,
+      repeatedRightEdge: repeatedRightEdgePixelError,
+      repeatedZoomRightEdge: repeatedZoomRightEdgePixelError,
+      rightEdge: rightEdgePixelError,
+      zoomLeftEdge: zoomLeftEdgePixelError,
+      zoomRightEdge: zoomRightEdgePixelError,
+    },
+    screenshots: { rightBound: rightEdgeScreenshot, zoomedOffCenter: zoomScreenshot },
+    zoomLeftEdge: zoomLeftEdgePixels.crop,
+    zoomRightEdge: zoomRightEdgePixels.crop,
+  }
+}
+
 async function setFileInput(cdp, sessionId, filePath) {
   const documentResult = await cdp.send('DOM.getDocument', { depth: -1, pierce: true }, sessionId)
   const queryResult = await cdp.send('DOM.querySelector', {
@@ -1244,6 +1493,20 @@ function assertJpegPixelEvidence(label, actual, expected) {
   return error
 }
 
+function assertCropPixelEvidence(label, evidence) {
+  const expected = computeExpectedPixels(
+    evidence.source,
+    evidence.crop,
+    { rotation: 0, flipHorizontal: false, flipVertical: false },
+    evidence.preview,
+  )
+  return assertJpegPixelEvidence(
+    label,
+    new Uint8ClampedArray(evidence.preview.pixels),
+    expected,
+  )
+}
+
 function assertMappingSeparation(label, expectedError, wrongMappingError) {
   assert(
     wrongMappingError.meanAbsoluteRgbError >= expectedError.meanAbsoluteRgbError + 20,
@@ -1284,7 +1547,7 @@ async function capturePixelEvidence(cdp, sessionId) {
   })()`)
 }
 
-async function runScenario({ allowedPaths, basePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation }) {
+async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
   const screenshots = {}
@@ -1459,6 +1722,13 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
   assert(outputDimensions.width === 16 && outputDimensions.height === 16, `Downloaded JPEG dimensions were ${outputDimensions.width}x${outputDimensions.height}, expected 16x16.`)
   assert(Object.values(outputFamilies).every((value) => value === false), `Injected JPEG metadata remained in output: ${JSON.stringify(outputFamilies)}`)
 
+  const cropDragRegression = await runCropDragBoundsRegression({
+    cdp,
+    cropDragFixturePath,
+    downloadDirectory,
+    sessionId,
+  })
+
   const cropSurfaceSizing = await runCropSurfaceSizingRegression({ cdp, layoutFixtures, sessionId })
   diagnostics.assertClean()
 
@@ -1478,6 +1748,7 @@ async function runScenario({ allowedPaths, basePath, downloadDirectory, fixtureP
     },
     network: formatNetworkReport(observedRequests),
     cropSurfaceSizing,
+    cropDragRegression,
     preview: {
       ...previewState,
       pixelEvidence: {
@@ -1496,6 +1767,7 @@ async function main() {
   const profileDirectory = join(temporaryRoot, 'chrome-profile')
   const downloadDirectory = join(temporaryRoot, 'downloads')
   const fixturePath = join(temporaryRoot, 'e2e-metadata-fixture.jpg')
+  const cropDragFixturePath = join(temporaryRoot, 'e2e-crop-drag.png')
   const layoutFixtures = CROP_SURFACE_SIZING_CASES.map((fixture) => ({
     ...fixture,
     path: join(temporaryRoot, fixture.filename),
@@ -1541,6 +1813,7 @@ async function main() {
     report = await runScenario({
       allowedPaths,
       basePath,
+      cropDragFixturePath,
       cdp,
       downloadDirectory,
       fixturePath,

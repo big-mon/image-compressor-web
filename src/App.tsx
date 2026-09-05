@@ -7,6 +7,7 @@ import {
   constrainCrop,
   createEditState,
   rotateEditState,
+  translateCrop,
   type AspectRatioPreset,
   type CropRect,
   type ImageEditState,
@@ -70,15 +71,8 @@ interface CropInteraction {
   readonly mode: CropInteractionMode
   readonly startX: number
   readonly startY: number
-  readonly startCrop: CropRect
-  readonly startPanX: number
-  readonly startPanY: number
+  readonly startEffectiveCrop: CropRect
   readonly displaySize: Size
-  readonly startGeometryCrop: CropRect
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(Math.max(value, minimum), maximum)
 }
 
 function formatBytes(bytes: number): string {
@@ -394,7 +388,8 @@ function App() {
       return
     }
     updateEditState((current) => {
-      const nextCrop = { ...geometry.crop, [field]: Math.max(1, value) }
+      const minimum = field === 'x' || field === 'y' ? 0 : 1
+      const nextCrop = { ...geometry.crop, [field]: Math.max(minimum, value) }
       return {
         ...current,
         crop: constrainCrop(nextCrop, geometry.displaySize, current.aspectRatio),
@@ -450,11 +445,8 @@ function App() {
       mode,
       startX: event.clientX,
       startY: event.clientY,
-      startCrop: editState.crop,
-      startPanX: editState.panX ?? 0,
-      startPanY: editState.panY ?? 0,
+      startEffectiveCrop: geometry.crop,
       displaySize: geometry.displaySize,
-      startGeometryCrop: geometry.crop,
     }
   }
 
@@ -472,9 +464,9 @@ function App() {
         ...current,
         crop: constrainCrop(
           {
-            ...interaction.startCrop,
-            width: Math.max(1, interaction.startCrop.width + deltaX),
-            height: Math.max(1, interaction.startCrop.height + deltaY),
+            ...interaction.startEffectiveCrop,
+            width: Math.max(1, interaction.startEffectiveCrop.width + deltaX),
+            height: Math.max(1, interaction.startEffectiveCrop.height + deltaY),
           },
           interaction.displaySize,
           current.aspectRatio,
@@ -486,32 +478,18 @@ function App() {
       return
     }
 
-    const travelX = interaction.displaySize.width - interaction.startGeometryCrop.width
-    const travelY = interaction.displaySize.height - interaction.startGeometryCrop.height
-    if (travelX > 1 || travelY > 1) {
-      updateEditState((current) => ({
-        ...current,
-        panX: travelX > 1
-          ? clamp(interaction.startPanX + deltaX / (travelX / 2), -1, 1)
-          : interaction.startPanX,
-        panY: travelY > 1
-          ? clamp(interaction.startPanY + deltaY / (travelY / 2), -1, 1)
-          : interaction.startPanY,
-      }))
-    } else {
-      updateEditState((current) => ({
-        ...current,
-        crop: constrainCrop(
-          {
-            ...interaction.startCrop,
-            x: interaction.startCrop.x + deltaX,
-            y: interaction.startCrop.y + deltaY,
-          },
-          interaction.displaySize,
-          current.aspectRatio,
-        ),
-      }))
-    }
+    updateEditState((current) => ({
+      ...current,
+      crop: translateCrop(
+        interaction.startEffectiveCrop,
+        { x: deltaX, y: deltaY },
+        interaction.displaySize,
+        current.aspectRatio,
+      ),
+      zoom: 1,
+      panX: 0,
+      panY: 0,
+    }))
   }
 
   const endCropInteraction = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -543,11 +521,7 @@ function App() {
     event.preventDefault()
     updateEditState((current) => ({
       ...current,
-      crop: constrainCrop(
-        { ...geometry.crop, x: geometry.crop.x + delta.x, y: geometry.crop.y + delta.y },
-        geometry.displaySize,
-        current.aspectRatio,
-      ),
+      crop: translateCrop(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
       zoom: 1,
       panX: 0,
       panY: 0,
