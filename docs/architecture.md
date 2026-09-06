@@ -26,7 +26,7 @@ File/drop
 
 | module | stable interface / ownership |
 | --- | --- |
-| `src/App.tsx` | browser UI、File input/drop、編集 intent、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。 |
+| `src/App.tsx` | browser UI、File input/drop、編集 intent、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
 | `src/image/stage.ts` | `createStageTransform` と crop surface style。CSS 表示文字列だけを組み立て、Canvas のピクセル処理は所有しない。 |
@@ -40,12 +40,13 @@ File/drop
 
 ## State, cache, and stale requests
 
-1. File を受け取ると `App` は MIME を検査し、decode 完了を `fileLoadGeneration` で guard する。新しい File または reset は `clearSource()` を呼び、現在の result intent を無効化する。
-2. `RasterProcessor` は同じ decoded pixel object を `sourceIdentity` で認識し、初回だけ pixel buffer の copy を `sourceKey` 付きで transfer する。後続 request は cache key を渡す。
-3. `clearSource()` は source key を捨て、generation を増やし、pending Promise を reject してから Worker に clear message を送る。Worker は cache を空にし、clear より前の queued request を stale にする。
-4. Worker scheduler は active を中断せず保持するが、新世代の request は queued にできる。active が終わると旧結果は stale、次の世代の最新 request が start する。queued が置き換わると置き換えられた request も stale になる。
-5. `App` の preview は request id と intent generation、download は request id と generation と source/edit/output identity を確認する。どの guard も一致しなければ UI、metrics、download に結果を採用しない。
-6. Worker error/stale、decode error、dispose は pending work を成功扱いにしない。unmount は processor を dispose し、残った source/rendered URL を revoke する。
+1. File を受け取ると `App` は candidate として MIME を検査し、decode 完了を `fileLoadGeneration` で guard する。candidate の読み込み中・失敗時は committed source、編集、result URL、現行 preview の debounce/in-flight work を保持する。新しい選択は論理的に obsolete な export と candidate を無効化し、比較表示を解放する。
+2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。reset は candidate generation を進めて candidate を取り消し、committed source の編集だけを再処理する。
+3. `RasterProcessor` は同じ decoded pixel object を `sourceIdentity` で認識し、初回だけ pixel buffer の copy を `sourceKey` 付きで transfer する。後続 request は cache key を渡す。
+4. `clearSource()` は source key を捨て、generation を増やし、pending Promise を reject してから Worker に clear message を送る。Worker は cache を空にし、clear より前の queued request を stale にする。
+5. Worker scheduler は active を中断せず保持するが、新世代の request は queued にできる。active が終わると旧結果は stale、次の世代の最新 request が start する。queued が置き換わると置き換えられた request も stale になる。
+6. `App` は `candidatePending/fileError`、`previewPending/processingError`、`exportPending` を別々に所有し、`busy` をそれらの組み合わせから導出する。preview は request id と intent generation、download は request id と generation と source/edit/output identity を確認する。どの guard も一致しなければ UI、metrics、download に結果を採用しない。
+7. Worker error/stale、decode error、dispose は pending work を成功扱いにしない。unmount は processor を dispose し、残った source/rendered URL を revoke する。
 
 この protocol では「古い処理を速く止められる」ことではなく、「古い処理が完了しても観測可能な current result にならない」ことが correctness の中心である。
 
@@ -91,7 +92,7 @@ Chromium E2E は CDP の HTTP/WebSocket 観測と static-server request log を�
 ## Resource ownership
 
 - `decodeImageFile` は `ImageBitmap` を `finally` で close し、fallback の temporary object URL を revoke する。
-- `App` は source File の object URL を次の File で置き換える前に revoke し、rendered result の URL も次の採用・reset・unmount で revoke する。
+- `App` は candidate decode/commit に失敗した一時 object URL を revoke し、成功した candidate の source URL を committed source として次の成功 commit・unmount で置き換え/revoke する。rendered result の URL も次の採用・reset・unmount で revoke する。
 - `RasterProcessor.dispose()` は pending work を reject し、Worker reference を terminate する。`clearSource()` は Worker cache を世代境界で無効化する。
 - Worker の Canvas は render request の局所値として保持し、source pixel ArrayBuffer の cache と message transfer の所有を混同しない。download anchor は click 後に DOM から外す。
 

@@ -103,10 +103,15 @@ function App() {
   const [renderedResult, setRenderedResult] = useState<RasterResult | undefined>()
   const [renderedUrl, setRenderedUrl] = useState('')
   const [renderedIsPreview, setRenderedIsPreview] = useState(true)
-  const [busy, setBusy] = useState(false)
+  const [candidatePending, setCandidatePending] = useState(false)
+  const [previewPending, setPreviewPending] = useState(false)
+  const [showingOriginal, setShowingOriginal] = useState(false)
+  const [exportPending, setExportPending] = useState(false)
   const [dragging, setDragging] = useState(false)
-  const [errorMessage, setErrorMessage] = useState('')
+  const [fileError, setFileError] = useState('')
+  const [processingError, setProcessingError] = useState('')
   const [processorReady, setProcessorReady] = useState(false)
+  const [processorError, setProcessorError] = useState('')
   const processorRef = useRef<RasterProcessor | undefined>(undefined)
   const sourceUrlRef = useRef<string | undefined>(undefined)
   const renderedUrlRef = useRef<string | undefined>(undefined)
@@ -118,6 +123,8 @@ function App() {
   const currentIntentRef = useRef<ResultIntent | undefined>(undefined)
   const cropSurfaceRef = useRef<HTMLDivElement | null>(null)
   const cropInteractionRef = useRef<CropInteraction | undefined>(undefined)
+  const comparisonButtonRef = useRef<HTMLButtonElement | null>(null)
+  const comparisonPointerIdRef = useRef<number | undefined>(undefined)
 
   currentIntentRef.current = asset && editState
     ? {
@@ -127,6 +134,18 @@ function App() {
         quality,
       }
     : undefined
+
+  const releaseOriginalComparison = () => {
+    const pointerId = comparisonPointerIdRef.current
+    comparisonPointerIdRef.current = undefined
+    setShowingOriginal(false)
+    if (pointerId !== undefined) {
+      const button = comparisonButtonRef.current
+      if (button?.hasPointerCapture(pointerId)) {
+        button.releasePointerCapture(pointerId)
+      }
+    }
+  }
 
   const invalidateResultIntent = () => {
     resultIntentGenerationRef.current += 1
@@ -164,6 +183,31 @@ function App() {
     }
     setRenderedUrl('')
     setRenderedResult(undefined)
+    setRenderedIsPreview(true)
+  }
+
+  const cancelExport = () => {
+    exportRequestIdRef.current += 1
+    exportActiveRef.current = undefined
+    setExportPending(false)
+  }
+
+  const invalidatePreview = () => {
+    invalidateResultIntent()
+    cancelExport()
+    releaseOriginalComparison()
+    releaseRenderedUrl()
+    setPreviewPending(true)
+    setFileError('')
+    setProcessingError('')
+  }
+
+  const beginFileSelection = () => {
+    cancelExport()
+    releaseOriginalComparison()
+    setCandidatePending(true)
+    setFileError('')
+    setProcessingError('')
   }
 
   const adoptRenderedResult = (result: RasterResult, isPreview: boolean): string => {
@@ -183,9 +227,12 @@ function App() {
     try {
       processor = createRasterProcessor()
       processorRef.current = processor
+      setProcessorError('')
       setProcessorReady(true)
     } catch (error) {
-      setErrorMessage(getErrorMessage(error, '画像処理ワーカーを起動できませんでした。'))
+      const message = getErrorMessage(error, '画像処理ワーカーを起動できませんでした。')
+      setProcessorError(message)
+      setProcessingError(message)
     }
 
     return () => {
@@ -207,11 +254,20 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!asset || !editState || !geometry || !processorReady) {
+    if (!asset || !editState || !geometry) {
+      return undefined
+    }
+    if (!processorReady) {
+      if (processorError) {
+        setPreviewPending(false)
+        setProcessingError(processorError)
+      }
       return undefined
     }
     const processor = processorRef.current
     if (!processor) {
+      setPreviewPending(false)
+      setProcessingError(processorError || '画像処理ワーカーを起動できませんでした。')
       return undefined
     }
 
@@ -221,8 +277,7 @@ function App() {
     }
 
     const requestId = ++previewRequestIdRef.current
-    setBusy(true)
-    setErrorMessage('')
+    setPreviewPending(true)
     const timeoutId = window.setTimeout(() => {
       if (exportActiveRef.current?.intentGeneration === intentGeneration) {
         return
@@ -243,9 +298,7 @@ function App() {
             return
           }
           adoptRenderedResult(result, true)
-          if (exportActiveRef.current?.intentGeneration !== intentGeneration) {
-            setBusy(false)
-          }
+          setPreviewPending(false)
         })
         .catch((error: unknown) => {
           if (
@@ -254,52 +307,68 @@ function App() {
           ) {
             return
           }
+          setPreviewPending(false)
           if (exportActiveRef.current?.intentGeneration !== intentGeneration) {
-            setBusy(false)
-            setErrorMessage(getErrorMessage(error, 'プレビューを生成できませんでした。'))
+            setProcessingError(getErrorMessage(error, 'プレビューを生成できませんでした。'))
           }
         })
     }, 160)
 
     return () => window.clearTimeout(timeoutId)
-  }, [asset, editState, geometry, outputMime, processorReady, quality])
+  }, [asset, editState, geometry, outputMime, processorError, processorReady, quality])
 
   const handleFile = async (file: File | undefined) => {
     if (!file) {
       return
     }
     const loadGeneration = ++fileLoadGenerationRef.current
-    invalidateResultIntent()
+    beginFileSelection()
     const mimeType = file.type.toLowerCase()
     if (!isSupportedImageMimeType(mimeType)) {
-      setBusy(false)
-      setErrorMessage('JPEG、PNG、WebP の画像だけを選択してください。')
+      setCandidatePending(false)
+      setFileError('JPEG、PNG、WebP の画像だけを選択してください。')
       return
     }
 
-    setBusy(true)
-    setErrorMessage('')
     try {
       const pixels = await decodeImageFile(file)
       if (fileLoadGenerationRef.current !== loadGeneration) {
         return
       }
       const objectUrl = URL.createObjectURL(file)
+      try {
+        invalidateResultIntent()
+        releaseOriginalComparison()
+        processorRef.current?.clearSource()
+      } catch (error) {
+        URL.revokeObjectURL(objectUrl)
+        setCandidatePending(false)
+        setPreviewPending(false)
+        setProcessingError(getErrorMessage(error, '画像処理を新しい画像へ切り替えられませんでした。'))
+        return
+      }
+      releaseRenderedUrl()
       if (sourceUrlRef.current) {
         URL.revokeObjectURL(sourceUrlRef.current)
       }
       sourceUrlRef.current = objectUrl
-      processorRef.current?.clearSource()
-      releaseRenderedUrl()
       setAsset({ file, pixels, objectUrl })
       setEditState(createEditState({ width: pixels.width, height: pixels.height }))
-      setBusy(false)
+      setCandidatePending(false)
+      setFileError('')
+      if (!processorRef.current) {
+        setPreviewPending(false)
+        setProcessingError(processorError || '画像処理ワーカーを起動できませんでした。')
+      } else {
+        setPreviewPending(true)
+        setProcessingError('')
+      }
     } catch (error) {
       if (fileLoadGenerationRef.current !== loadGeneration) {
         return
       }
-      setBusy(false)
-      setErrorMessage(getErrorMessage(error, '画像を読み込めませんでした。'))
+      setCandidatePending(false)
+      setFileError(getErrorMessage(error, '画像を読み込めませんでした。'))
     }
   }
 
@@ -328,26 +397,35 @@ function App() {
       return
     }
     fileLoadGenerationRef.current += 1
-    invalidateResultIntent()
-    processorRef.current?.clearSource()
+    setCandidatePending(false)
+    invalidatePreview()
+    try {
+      processorRef.current?.clearSource()
+    } catch (error) {
+      setPreviewPending(false)
+      setProcessingError(getErrorMessage(error, '画像処理をリセットできませんでした。'))
+    }
     setEditState(createEditState({ width: asset.pixels.width, height: asset.pixels.height }))
-    releaseRenderedUrl()
-    setErrorMessage('')
-    setBusy(false)
   }
 
   const updateEditState = (update: (current: ImageEditState) => ImageEditState) => {
-    invalidateResultIntent()
+    invalidatePreview()
     setEditState((current) => current ? update(current) : current)
   }
 
   const updateOutputMime = (nextOutputMime: OutputMime) => {
-    invalidateResultIntent()
+    if (nextOutputMime === outputMime) {
+      return
+    }
+    invalidatePreview()
     setOutputMime(nextOutputMime)
   }
 
   const updateQuality = (nextQuality: number) => {
-    invalidateResultIntent()
+    if (nextQuality === quality) {
+      return
+    }
+    invalidatePreview()
     setQuality(nextQuality)
   }
 
@@ -503,6 +581,30 @@ function App() {
     }
   }
 
+  const beginOriginalComparison = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!renderedUrl || !renderedResult) {
+      return
+    }
+    event.preventDefault()
+    const button = event.currentTarget
+    comparisonPointerIdRef.current = event.pointerId
+    button.setPointerCapture(event.pointerId)
+    setShowingOriginal(true)
+  }
+
+  const endOriginalComparison = (event?: ReactPointerEvent<HTMLButtonElement>) => {
+    const activePointerId = comparisonPointerIdRef.current
+    if (
+      event &&
+      event.type === 'pointerup' &&
+      activePointerId !== undefined &&
+      event.pointerId !== activePointerId
+    ) {
+      return
+    }
+    releaseOriginalComparison()
+  }
+
   const moveCropWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!geometry) {
       return
@@ -544,8 +646,8 @@ function App() {
     const processor = processorRef.current
     const requestId = ++exportRequestIdRef.current
     exportActiveRef.current = { requestId, intentGeneration }
-    setBusy(true)
-    setErrorMessage('')
+    setExportPending(true)
+    setProcessingError('')
     const output = { mimeType: outputMime, quality, preview: false }
 
     try {
@@ -564,18 +666,19 @@ function App() {
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
-      setBusy(false)
+      setPreviewPending(false)
     } catch (error) {
       const isCurrent = exportActiveRef.current?.requestId === requestId &&
         resultIntentGenerationRef.current === intentGeneration &&
         isSameResultIntent(currentIntentRef.current, expectedIntent)
       if (isCurrent) {
-        setBusy(false)
-        setErrorMessage(getErrorMessage(error, 'ダウンロード用の画像を生成できませんでした。'))
+        setPreviewPending(false)
+        setProcessingError(getErrorMessage(error, 'ダウンロード用の画像を生成できませんでした。'))
       }
     } finally {
       if (exportActiveRef.current?.requestId === requestId) {
         exportActiveRef.current = undefined
+        setExportPending(false)
       }
     }
   }
@@ -602,6 +705,29 @@ function App() {
   const cropSurfaceStyle: CSSProperties | undefined = geometry
     ? createCropSurfaceStyle(geometry.displaySize)
     : undefined
+  const comparisonAvailable = Boolean(renderedUrl && renderedResult)
+  const showingOriginalComparison = comparisonAvailable && showingOriginal
+  const pendingMaskVisible = previewPending && !comparisonAvailable
+  const sourceOccluded = comparisonAvailable
+    ? !showingOriginalComparison
+    : pendingMaskVisible
+  const errorMessage = fileError || processingError || processorError
+  const busy = candidatePending || previewPending || exportPending
+  const previewModeLabel = showingOriginalComparison
+    ? '元画像'
+    : comparisonAvailable
+      ? '圧縮後'
+      : previewPending
+        ? '更新中'
+        : errorMessage
+          ? 'エラー'
+          : 'プレビューなし'
+
+  useEffect(() => {
+    const handleWindowBlur = () => releaseOriginalComparison()
+    window.addEventListener('blur', handleWindowBlur)
+    return () => window.removeEventListener('blur', handleWindowBlur)
+  }, [])
 
   return (
     <>
@@ -623,7 +749,19 @@ function App() {
           <div className="toolbar-actions">
             {asset ? (
               <span className={`status-chip${busy ? ' is-busy' : ''}`} role="status" aria-live="polite">
-                {busy ? '処理中…' : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
+                {busy
+                  ? fileError
+                    ? 'エラー'
+                    : candidatePending
+                      ? '画像を読み込み中…'
+                      : previewPending
+                        ? '圧縮プレビューを更新中…'
+                        : '処理中…'
+                  : renderedResult
+                    ? 'プレビュー準備完了'
+                    : errorMessage
+                      ? 'エラー'
+                      : '画像を準備中'}
               </span>
             ) : null}
             {asset ? (
@@ -667,11 +805,27 @@ function App() {
                       alt={`${asset.file.name} の編集対象`}
                       draggable={false}
                       style={stageImageStyle}
+                      aria-hidden={sourceOccluded}
                     />
                     <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
-                    <div className="crop-shade crop-shade-bottom" style={{ height: cropStyle ? `${100 - Number.parseFloat(cropStyle.top) - Number.parseFloat(cropStyle.height)}%` : undefined }} />
+                    <div className="crop-shade crop-shade-bottom" style={{ height: geometry ? `${Math.max(0, geometry.displaySize.height - currentCrop.y - currentCrop.height) / geometry.displaySize.height * 100}%` : undefined }} />
                     <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
-                    <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: cropStyle ? `${100 - Number.parseFloat(cropStyle.left) - Number.parseFloat(cropStyle.width)}%` : undefined, height: cropStyle?.height }} />
+                    <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: geometry ? `${Math.max(0, geometry.displaySize.width - currentCrop.x - currentCrop.width) / geometry.displaySize.width * 100}%` : undefined, height: cropStyle?.height }} />
+                    {renderedUrl && renderedResult ? (
+                      <img
+                        className="processed-preview"
+                        src={renderedUrl}
+                        alt="圧縮後の画像プレビュー"
+                        draggable={false}
+                        style={{ ...cropStyle, visibility: showingOriginalComparison ? 'hidden' : 'visible' }}
+                        aria-hidden={showingOriginalComparison}
+                      />
+                    ) : null}
+                    {pendingMaskVisible ? (
+                      <div className="processed-preview-pending" style={cropStyle} role="status" aria-live="polite">
+                        圧縮プレビューを更新中…
+                      </div>
+                    ) : null}
                     <div
                       className="crop-rectangle"
                       style={cropStyle}
@@ -696,6 +850,42 @@ function App() {
                         onPointerDown={(event) => beginCropInteraction(event, 'resize')}
                       />
                     </div>
+                  </div>
+                  <div className="stage-controls">
+                    <span className={`stage-preview-label${showingOriginalComparison ? ' is-original' : ''}`} aria-live="polite">
+                      {previewModeLabel}
+                    </span>
+                    <button
+                      ref={comparisonButtonRef}
+                      className={`comparison-hold-button${showingOriginalComparison ? ' is-active' : ''}`}
+                      type="button"
+                      disabled={!comparisonAvailable}
+                      aria-pressed={showingOriginalComparison}
+                      aria-label="押して元画像を表示。離すと圧縮後に戻ります"
+                      onPointerDown={beginOriginalComparison}
+                      onPointerUp={endOriginalComparison}
+                      onPointerCancel={endOriginalComparison}
+                      onLostPointerCapture={() => releaseOriginalComparison()}
+                      onBlur={() => releaseOriginalComparison()}
+                      onKeyDown={(event) => {
+                        if (event.key !== ' ' && event.key !== 'Enter') {
+                          return
+                        }
+                        event.preventDefault()
+                        if (!event.repeat && comparisonAvailable) {
+                          setShowingOriginal(true)
+                        }
+                      }}
+                      onKeyUp={(event) => {
+                        if (event.key === ' ' || event.key === 'Enter') {
+                          event.preventDefault()
+                          releaseOriginalComparison()
+                        }
+                      }}
+                      onContextMenu={(event) => event.preventDefault()}
+                    >
+                      押して元画像を表示
+                    </button>
                   </div>
                 </div>
 
@@ -765,23 +955,6 @@ function App() {
                   <div className="reduction-line"><span>容量の変化</span><strong>{metrics ? `${metrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(metrics.reductionPercent).toFixed(1)}%` : '—'}</strong></div>
                 </div>
 
-                <section className="comparison-section" aria-labelledby="comparison-title">
-                  <div className="section-heading">
-                    <div>
-                      <p className="section-kicker">PREVIEW</p>
-                      <h2 id="comparison-title">変換後</h2>
-                    </div>
-                    <span className="comparison-note">プレビュー</span>
-                  </div>
-                  <div className="comparison-grid">
-                    <figure className="comparison-card after-card">
-                      <figcaption><span>{renderedIsPreview ? '変換後プレビュー' : '変換後'}</span><span>{renderedResult ? formatDimensions({ width: renderedResult.width, height: renderedResult.height }) : '生成中'}</span></figcaption>
-                      <div className="comparison-media">
-                        {renderedUrl ? <img src={renderedUrl} alt="変換後の画像プレビュー" /> : <span className="empty-preview">プレビューを生成しています…</span>}
-                      </div>
-                    </figure>
-                  </div>
-                </section>
               </aside>
             </section>
 
