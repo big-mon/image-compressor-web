@@ -26,11 +26,8 @@ import {
   type RasterResult,
 } from './image/raster'
 import {
-  CROP_SURFACE_DESKTOP_MAX_HEIGHT_PX,
-  CROP_SURFACE_MOBILE_MAX_HEIGHT_PX,
   createCropSurfaceStyle,
   createStageTransform,
-  getCropSurfaceMaxWidthPx,
 } from './image/stage'
 
 const ASPECT_OPTIONS: readonly { value: AspectRatioPreset; label: string }[] = [
@@ -43,6 +40,15 @@ const ASPECT_OPTIONS: readonly { value: AspectRatioPreset; label: string }[] = [
   { value: '2:3', label: '2:3' },
   { value: '16:9', label: '16:9' },
   { value: '9:16', label: '9:16' },
+]
+
+type CompositionGuide = 'none' | 'thirds' | 'golden' | 'diagonal'
+
+const COMPOSITION_GUIDE_OPTIONS: readonly { value: CompositionGuide; label: string }[] = [
+  { value: 'none', label: 'なし' },
+  { value: 'thirds', label: '三分割' },
+  { value: 'golden', label: '黄金比' },
+  { value: 'diagonal', label: '対角線' },
 ]
 
 const OUTPUT_OPTIONS: readonly { value: OutputMime; label: string }[] = [
@@ -60,11 +66,6 @@ interface SourceAsset {
 }
 
 type CropInteractionMode = 'move' | 'resize'
-
-type CropSurfaceStyle = CSSProperties & {
-  readonly '--crop-stage-desktop-width': string
-  readonly '--crop-stage-mobile-width': string
-}
 
 interface CropInteraction {
   readonly pointerId: number
@@ -98,6 +99,7 @@ function App() {
   const [editState, setEditState] = useState<ImageEditState | undefined>()
   const [outputMime, setOutputMime] = useState<OutputMime>('image/jpeg')
   const [quality, setQuality] = useState(0.82)
+  const [compositionGuide, setCompositionGuide] = useState<CompositionGuide>('thirds')
   const [renderedResult, setRenderedResult] = useState<RasterResult | undefined>()
   const [renderedUrl, setRenderedUrl] = useState('')
   const [renderedIsPreview, setRenderedIsPreview] = useState(true)
@@ -597,13 +599,8 @@ function App() {
         transform: createStageTransform(editState.rotation, editState.flipHorizontal, editState.flipVertical),
       }
     : undefined
-  const cropSurfaceStyle: CropSurfaceStyle | undefined = geometry
-    ? {
-        ...createCropSurfaceStyle(geometry.displaySize),
-        maxWidth: undefined,
-        '--crop-stage-desktop-width': `${getCropSurfaceMaxWidthPx(geometry.displaySize, CROP_SURFACE_DESKTOP_MAX_HEIGHT_PX)}px`,
-        '--crop-stage-mobile-width': `${getCropSurfaceMaxWidthPx(geometry.displaySize, CROP_SURFACE_MOBILE_MAX_HEIGHT_PX)}px`,
-      }
+  const cropSurfaceStyle: CSSProperties | undefined = geometry
+    ? createCropSurfaceStyle(geometry.displaySize)
     : undefined
 
   return (
@@ -612,7 +609,7 @@ function App() {
         <header className="tool-toolbar">
           <div className="toolbar-copy">
             <h1>画像を圧縮・編集</h1>
-            <p className="tool-reassurance">画像のアップロードなし</p>
+            <p className="tool-reassurance">画像は外部に送信されません</p>
           </div>
           <input
             id="image-input"
@@ -623,76 +620,82 @@ function App() {
             aria-label="画像ファイルを選択"
             onChange={handleInputChange}
           />
-          {asset ? (
-            <label
-              className={`change-image-button${dragging ? ' is-dragging' : ''}`}
-              htmlFor="image-input"
-              role="button"
-              tabIndex={0}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  document.getElementById('image-input')?.click()
-                }
-              }}
-            >
-              画像を変更
-            </label>
-          ) : null}
+          <div className="toolbar-actions">
+            {asset ? (
+              <span className={`status-chip${busy ? ' is-busy' : ''}`} role="status" aria-live="polite">
+                {busy ? '処理中…' : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
+              </span>
+            ) : null}
+            {asset ? (
+              <label
+                className={`change-image-button${dragging ? ' is-dragging' : ''}`}
+                htmlFor="image-input"
+                role="button"
+                tabIndex={0}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    document.getElementById('image-input')?.click()
+                  }
+                }}
+              >
+                画像を変更
+              </label>
+            ) : null}
+          </div>
         </header>
 
         {asset && editState && geometry ? (
           <>
             <section className="workspace" aria-label="画像エディター">
               <div className="editor-column">
-                <div className="section-heading">
-                  <div>
-                    <p className="section-kicker">EDITOR</p>
-                    <h2>切り抜きと見え方</h2>
-                  </div>
-                  <span className={`status-chip${busy ? ' is-busy' : ''}`} role="status" aria-live="polite">
-                    {busy ? '処理中…' : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
-                  </span>
-                </div>
-
-                <div
-                  ref={cropSurfaceRef}
-                  className="crop-surface"
-                  style={cropSurfaceStyle}
-                  onPointerMove={moveCropInteraction}
-                  onPointerUp={endCropInteraction}
-                  onPointerCancel={endCropInteraction}
-                >
-                  <img
-                    className="stage-image"
-                    src={asset.objectUrl}
-                    alt={`${asset.file.name} の編集対象`}
-                    draggable={false}
-                    style={stageImageStyle}
-                  />
-                  <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
-                  <div className="crop-shade crop-shade-bottom" style={{ height: cropStyle ? `${100 - Number.parseFloat(cropStyle.top) - Number.parseFloat(cropStyle.height)}%` : undefined }} />
-                  <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
-                  <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: cropStyle ? `${100 - Number.parseFloat(cropStyle.left) - Number.parseFloat(cropStyle.width)}%` : undefined, height: cropStyle?.height }} />
+                <div className="stage-area" aria-label="画像編集ステージ">
                   <div
-                    className="crop-rectangle"
-                    style={cropStyle}
-                    role="group"
-                    tabIndex={0}
-                    aria-label="切り抜き範囲。矢印キーで移動、Shiftで大きく移動"
-                    onKeyDown={moveCropWithKeyboard}
-                    onPointerDown={(event) => beginCropInteraction(event, 'move')}
+                    ref={cropSurfaceRef}
+                    className="crop-surface"
+                    style={cropSurfaceStyle}
+                    onPointerMove={moveCropInteraction}
+                    onPointerUp={endCropInteraction}
+                    onPointerCancel={endCropInteraction}
                   >
-                    <span className="crop-grid" aria-hidden="true" />
-                    <button
-                      className="crop-handle"
-                      type="button"
-                      aria-label="切り抜き範囲をリサイズ"
-                      onPointerDown={(event) => beginCropInteraction(event, 'resize')}
+                    <img
+                      className="stage-image"
+                      src={asset.objectUrl}
+                      alt={`${asset.file.name} の編集対象`}
+                      draggable={false}
+                      style={stageImageStyle}
                     />
+                    <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
+                    <div className="crop-shade crop-shade-bottom" style={{ height: cropStyle ? `${100 - Number.parseFloat(cropStyle.top) - Number.parseFloat(cropStyle.height)}%` : undefined }} />
+                    <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
+                    <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: cropStyle ? `${100 - Number.parseFloat(cropStyle.left) - Number.parseFloat(cropStyle.width)}%` : undefined, height: cropStyle?.height }} />
+                    <div
+                      className="crop-rectangle"
+                      style={cropStyle}
+                      role="group"
+                      tabIndex={0}
+                      aria-label="切り抜き範囲。矢印キーで移動、Shiftで大きく移動"
+                      onKeyDown={moveCropWithKeyboard}
+                      onPointerDown={(event) => beginCropInteraction(event, 'move')}
+                    >
+                      {compositionGuide === 'diagonal' ? (
+                        <svg className="crop-guide crop-guide-diagonal" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                          <line x1="0" y1="0" x2="100" y2="100" />
+                          <line x1="0" y1="100" x2="100" y2="0" />
+                        </svg>
+                      ) : (
+                        <span className={`crop-guide${compositionGuide === 'thirds' || compositionGuide === 'golden' ? ' crop-grid' : ''} crop-guide-${compositionGuide}`} aria-hidden="true" />
+                      )}
+                      <button
+                        className="crop-handle"
+                        type="button"
+                        aria-label="切り抜き範囲をリサイズ"
+                        onPointerDown={(event) => beginCropInteraction(event, 'resize')}
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -702,29 +705,13 @@ function App() {
                   <button type="button" className={`secondary-button${editState.flipHorizontal ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipHorizontal: !current.flipHorizontal }))}>↔ 左右反転</button>
                   <button type="button" className={`secondary-button${editState.flipVertical ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipVertical: !current.flipVertical }))}>↕ 上下反転</button>
                   <button type="button" className="text-button" onClick={resetEdits}>編集をリセット</button>
+                  <div className="guide-control">
+                    <label htmlFor="composition-guide">構図補助線</label>
+                    <select id="composition-guide" value={compositionGuide} onChange={(event) => setCompositionGuide(event.target.value as CompositionGuide)}>
+                      {COMPOSITION_GUIDE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </div>
                 </div>
-
-                <section className="comparison-section" aria-labelledby="comparison-title">
-                  <div className="section-heading">
-                    <div>
-                      <p className="section-kicker">PREVIEW</p>
-                      <h2 id="comparison-title">変換前と変換後</h2>
-                    </div>
-                    <span className="comparison-note">プレビュー</span>
-                  </div>
-                  <div className="comparison-grid">
-                    <figure className="comparison-card">
-                      <figcaption><span>元画像</span><span>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</span></figcaption>
-                      <div className="comparison-media"><img src={asset.objectUrl} alt="変換前の元画像" /></div>
-                    </figure>
-                    <figure className="comparison-card after-card">
-                      <figcaption><span>{renderedIsPreview ? '変換後プレビュー' : '変換後'}</span><span>{renderedResult ? formatDimensions({ width: renderedResult.width, height: renderedResult.height }) : '生成中'}</span></figcaption>
-                      <div className="comparison-media">
-                        {renderedUrl ? <img src={renderedUrl} alt="変換後の画像プレビュー" /> : <span className="empty-preview">プレビューを生成しています…</span>}
-                      </div>
-                    </figure>
-                  </div>
-                </section>
               </div>
 
               <aside className="settings-column" aria-label="出力設定">
@@ -753,11 +740,22 @@ function App() {
                     <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
                     <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
                   </div>
+                  <div className="aspect-ratio-control">
+                    <div className="field-label-row"><label className="field-label" htmlFor="aspect-ratio">アスペクト比</label><span className="field-help">切り抜き範囲に適用</span></div>
+                    <select id="aspect-ratio" value={editState.aspectRatio} onChange={(event) => setAspectRatio(event.target.value as AspectRatioPreset)}>
+                      {ASPECT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </div>
                   <div className="effective-size">
                     <span>有効な出力寸法</span>
                     <strong>{formatDimensions(geometry.outputSize)}</strong>
                   </div>
                 </div>
+
+                <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>
+                  ダウンロード .{getOutputExtension(outputMime)}
+                </button>
+                <p className="download-hint">ファイル名は安全な形に整えて保存します。</p>
 
                 <div className="metrics-card" aria-label="画像メトリクス">
                   <div className="metric-line"><span>元画像</span><strong>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</strong></div>
@@ -767,10 +765,23 @@ function App() {
                   <div className="reduction-line"><span>容量の変化</span><strong>{metrics ? `${metrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(metrics.reductionPercent).toFixed(1)}%` : '—'}</strong></div>
                 </div>
 
-                <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>
-                  ダウンロード .{getOutputExtension(outputMime)}
-                </button>
-                <p className="download-hint">ファイル名は安全な形に整えて保存します。</p>
+                <section className="comparison-section" aria-labelledby="comparison-title">
+                  <div className="section-heading">
+                    <div>
+                      <p className="section-kicker">PREVIEW</p>
+                      <h2 id="comparison-title">変換後</h2>
+                    </div>
+                    <span className="comparison-note">プレビュー</span>
+                  </div>
+                  <div className="comparison-grid">
+                    <figure className="comparison-card after-card">
+                      <figcaption><span>{renderedIsPreview ? '変換後プレビュー' : '変換後'}</span><span>{renderedResult ? formatDimensions({ width: renderedResult.width, height: renderedResult.height }) : '生成中'}</span></figcaption>
+                      <div className="comparison-media">
+                        {renderedUrl ? <img src={renderedUrl} alt="変換後の画像プレビュー" /> : <span className="empty-preview">プレビューを生成しています…</span>}
+                      </div>
+                    </figure>
+                  </div>
+                </section>
               </aside>
             </section>
 
@@ -797,12 +808,6 @@ function App() {
                 </div>
 
                 <div className="control-card">
-                  <div className="control-row">
-                    <label htmlFor="aspect-ratio">アスペクト比</label>
-                    <select id="aspect-ratio" value={editState.aspectRatio} onChange={(event) => setAspectRatio(event.target.value as AspectRatioPreset)}>
-                      {ASPECT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                  </div>
                   <div className="range-control">
                     <div className="range-label"><label htmlFor="zoom">ズーム</label><output htmlFor="zoom">{(editState.zoom ?? 1).toFixed(2)}×</output></div>
                     <input id="zoom" type="range" min="1" max="8" step="0.01" value={editState.zoom ?? 1} onChange={(event) => updateEditState((current) => ({ ...current, zoom: Number(event.target.value) }))} />

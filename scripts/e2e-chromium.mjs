@@ -26,7 +26,7 @@ const EXPECTED_TITLE = '画像圧縮・トリミングをブラウザで | image
 const EXPECTED_DESCRIPTION = 'JPEG・PNG・WebPをブラウザ内でトリミング、回転、反転、リサイズ、圧縮。画像を外部へアップロードせず、メタデータを削除して保存できます。'
 const EXPECTED_CANONICAL = 'https://app.damonge.com/image-compressor-web/'
 const EXPECTED_H1 = '画像を圧縮・編集'
-const EXPECTED_REASSURANCE = '画像のアップロードなし'
+const EXPECTED_REASSURANCE = '画像は外部に送信されません'
 const EXPECTED_PRIVACY_COPY = 'すべての処理はこのブラウザ内で完結します。ピクセルにデコードしてから再エンコードするため、出力画像のメタデータは削除されます。JPEGの回転もロスレス変換ではなく再エンコードです。'
 const EXPECTED_FOOTER_COPYRIGHT = '© 2026 image-compressor-web'
 const SCREENSHOT_DIRECTORY = process.env.E2E_SCREENSHOT_DIR ? resolve(process.env.E2E_SCREENSHOT_DIR) : undefined
@@ -34,6 +34,7 @@ const DESKTOP_VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1, mobil
 const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }
 const CROP_SURFACE_SIZING_CASES = [
   { key: 'landscape-16-9', filename: 'e2e-landscape-16-9.png', width: 160, height: 90 },
+  { key: 'portrait-1-2', filename: 'e2e-portrait-1-2.png', width: 160, height: 320 },
   { key: 'panorama-10-1', filename: 'e2e-panorama-10-1.png', width: 1000, height: 100 },
 ]
 
@@ -605,6 +606,7 @@ async function captureToolLayout(cdp, sessionId) {
     }
     const dropZone = document.querySelector('.drop-zone')
     const advancedControls = document.querySelector('.advanced-controls')
+    const privacyDetails = document.querySelector('.privacy-details')
     return {
       advancedControls: advancedControls ? {
         ...describe('.advanced-controls'),
@@ -614,10 +616,12 @@ async function captureToolLayout(cdp, sessionId) {
       changeImage: describe('.change-image-button'),
       comparisonCardCount: document.querySelectorAll('.comparison-card').length,
       comparisonImages: [...document.querySelectorAll('.comparison-media')].map(describeComparisonImage),
-      comparisonInEditor: document.querySelector('.comparison-section')?.closest('.editor-column') !== null,
+      comparisonInSettings: document.querySelector('.comparison-section')?.closest('.settings-column') !== null,
       comparisonMedia: describe('.comparison-media'),
       comparisonNote: describe('.comparison-note'),
       comparisonSection: describe('.comparison-section'),
+      aspectRatio: describe('#aspect-ratio'),
+      compositionGuide: describe('#composition-guide'),
       cropSurface: describe('.crop-surface'),
       dropZone: dropZone ? {
         ...describe('.drop-zone'),
@@ -628,19 +632,29 @@ async function captureToolLayout(cdp, sessionId) {
       emptyStatePresent: document.querySelector('.empty-state') !== null,
       editor: describe('.editor-column'),
       editorActions: describe('.editor-actions'),
+      editorHeaderPresent: [...document.querySelectorAll('.editor-column .section-kicker, .editor-column h2')].some((element) => (
+        element.textContent?.trim() === 'EDITOR' || element.textContent?.trim() === '切り抜きと見え方'
+      )),
       h1: describe('h1'),
       h1Count: document.querySelectorAll('h1').length,
       mobileWidth: window.innerWidth,
       noHorizontalOverflow: document.documentElement.scrollWidth <= window.innerWidth + 1 && document.body.scrollWidth <= window.innerWidth + 1,
+      originalPreviewCardCount: document.querySelectorAll('.comparison-card:not(.after-card)').length,
       outputFormat: describe('#output-format'),
       privacyCardPresent: document.querySelector('.privacy-card') !== null,
       privacyCopy: document.querySelector('.privacy-details-body')?.textContent?.trim() ?? '',
       quality: describe('#quality'),
       reassurance: describe('.tool-reassurance'),
       settings: describe('.settings-column'),
+      sourceImageCount: document.querySelectorAll('.stage-image').length,
+      sourceMetrics: describe('.metrics-card .metric-line:first-child strong'),
+      stageArea: describe('.stage-area'),
       workspace: describe('.workspace'),
       download: describe('.download-button'),
-      privacyDetails: describe('.privacy-details'),
+      privacyDetails: privacyDetails ? {
+        ...describe('.privacy-details'),
+        open: privacyDetails.open,
+      } : null,
       viewportHeight: window.innerHeight,
       viewportWidth: window.innerWidth,
     }
@@ -656,25 +670,19 @@ function assertInsideViewport(rect, viewport, description) {
   assert(rect.top >= -1 && rect.bottom <= viewport.height + 1, `${description} is outside the initial viewport: ${JSON.stringify({ rect, viewport })}`)
 }
 
-function assertBeginsInViewport(rect, viewport, description) {
-  assertVisibleRect(rect, description)
-  assert(rect.top >= -1 && rect.top <= viewport.height + 1, `${description} does not begin in the initial viewport: ${JSON.stringify({ rect, viewport })}`)
-}
-
 function assertComparisonImagesFit(layout, mode) {
-  assert(layout.comparisonImages.length === 2 && layout.comparisonImages.every(Boolean), `Expected two comparison images on ${mode}: ${JSON.stringify(layout.comparisonImages)}`)
-  for (const [index, comparisonImage] of layout.comparisonImages.entries()) {
-    const description = `${mode} comparison image ${index + 1}`
-    assert(comparisonImage.objectFit === 'contain', `${description} does not use object-fit: contain: ${JSON.stringify(comparisonImage)}`)
-    assertVisibleRect(comparisonImage.image, description)
-    assert(
-      comparisonImage.image.left >= comparisonImage.media.left - 1 &&
-        comparisonImage.image.right <= comparisonImage.media.right + 1 &&
-        comparisonImage.image.top >= comparisonImage.media.top - 1 &&
-        comparisonImage.image.bottom <= comparisonImage.media.bottom + 1,
-      `${description} is not contained by its comparison media: ${JSON.stringify(comparisonImage)}`,
-    )
-  }
+  assert(layout.comparisonImages.length === 1 && layout.comparisonImages.every(Boolean), `Expected one converted preview image on ${mode}: ${JSON.stringify(layout.comparisonImages)}`)
+  const comparisonImage = layout.comparisonImages[0]
+  const description = `${mode} converted preview image`
+  assert(comparisonImage.objectFit === 'contain', `${description} does not use object-fit: contain: ${JSON.stringify(comparisonImage)}`)
+  assertVisibleRect(comparisonImage.image, description)
+  assert(
+    comparisonImage.image.left >= comparisonImage.media.left - 1 &&
+      comparisonImage.image.right <= comparisonImage.media.right + 1 &&
+      comparisonImage.image.top >= comparisonImage.media.top - 1 &&
+      comparisonImage.image.bottom <= comparisonImage.media.bottom + 1,
+    `${description} is not contained by its comparison media: ${JSON.stringify(comparisonImage)}`,
+  )
 }
 
 async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
@@ -692,6 +700,7 @@ async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
   assert(layout.dropZone.cursor === 'pointer', `The empty ${mode} drop zone is not pointer-activated: ${JSON.stringify(layout.dropZone)}`)
   assert(layout.reassurance?.text === EXPECTED_REASSURANCE, `The no-upload reassurance changed unexpectedly: ${JSON.stringify(layout.reassurance)}`)
   assert(layout.privacyCopy === EXPECTED_PRIVACY_COPY, `The privacy disclosure changed unexpectedly: ${JSON.stringify(layout.privacyCopy)}`)
+  assert(layout.privacyDetails?.open === false, `Technical privacy details must remain collapsed on empty ${mode}: ${JSON.stringify(layout.privacyDetails)}`)
   assertInsideViewport(layout.reassurance, viewport, `no-upload reassurance on empty ${mode}`)
   assert(layout.noHorizontalOverflow, `Empty ${mode} layout overflows horizontally: ${JSON.stringify(layout)}`)
   const focusReachedDropZone = await evaluate(cdp, sessionId, `(() => {
@@ -708,17 +717,27 @@ async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
   assert(layout.viewportWidth === viewport.width && layout.viewportHeight === viewport.height, `Unexpected ${mode} viewport: ${JSON.stringify(layout)}`)
   assert(layout.dropZone === null, `The full upload area remains after loading on ${mode}: ${JSON.stringify(layout.dropZone)}`)
   assertVisibleRect(layout.changeImage, `${mode} change-image affordance`)
+  assert(layout.editorHeaderPresent === false, `The legacy editor heading remains on ${mode}: ${JSON.stringify(layout)}`)
+  assert(layout.sourceImageCount === 1, `The original image is not represented by exactly one stage image on ${mode}: ${JSON.stringify(layout)}`)
+  assert(layout.originalPreviewCardCount === 0, `The duplicate original preview remains on ${mode}: ${JSON.stringify(layout)}`)
   assertVisibleRect(layout.cropSurface, `${mode} crop surface`)
-  assert(layout.cropSurface.height <= (mode === 'mobile' ? 204 : 324), `${mode} crop surface is too tall: ${JSON.stringify(layout.cropSurface)}`)
-  assert(layout.comparisonInEditor, `The transformed preview is not adjacent to the editor on ${mode}.`)
+  assertVisibleRect(layout.stageArea, `${mode} stage area`)
+  assert(layout.reassurance?.text === EXPECTED_REASSURANCE, `The loaded ${mode} privacy reassurance changed unexpectedly: ${JSON.stringify(layout.reassurance)}`)
+  assertInsideViewport(layout.reassurance, viewport, `no-upload reassurance on loaded ${mode}`)
+  assert(layout.privacyDetails?.open === false, `Technical privacy details must remain collapsed on loaded ${mode}: ${JSON.stringify(layout.privacyDetails)}`)
+  assert(Math.abs(layout.stageArea.width - layout.editor.width) <= 2, `${mode} stage area does not fill the editor column: ${JSON.stringify({ editor: layout.editor, stageArea: layout.stageArea })}`)
+  assert(layout.stageArea.height >= (mode === 'mobile' ? 400 : 500), `${mode} stage area was not enlarged for the full-window editor: ${JSON.stringify({ stageArea: layout.stageArea, viewport })}`)
+  assert(layout.cropSurface.height > (mode === 'mobile' ? 204 : 324), `${mode} portrait crop surface did not grow beyond the retired height cap: ${JSON.stringify(layout.cropSurface)}`)
   assertVisibleRect(layout.editorActions, `${mode} crop action row`)
-  assert(layout.editorActions.top >= layout.cropSurface.bottom - 1 && layout.editorActions.top - layout.cropSurface.bottom < 24, `${mode} crop action row is not immediately after the crop surface: ${JSON.stringify({ cropSurface: layout.cropSurface, editorActions: layout.editorActions })}`)
+  assertVisibleRect(layout.compositionGuide, `${mode} composition guide control`)
+  assert(layout.editorActions.top >= layout.stageArea.bottom - 1 && layout.editorActions.top - layout.stageArea.bottom < 24, `${mode} crop action row is not immediately after the stage area: ${JSON.stringify({ stageArea: layout.stageArea, cropSurface: layout.cropSurface, editorActions: layout.editorActions })}`)
+  assertVisibleRect(layout.aspectRatio, `${mode} aspect ratio control`)
   assertVisibleRect(layout.comparisonSection, `${mode} comparison section`)
-  assert(layout.comparisonSection.top > layout.editorActions.bottom, `${mode} comparison section precedes the crop action row: ${JSON.stringify({ comparisonSection: layout.comparisonSection, editorActions: layout.editorActions })}`)
-  assert(layout.comparisonCardCount === 2, `Expected compact before/after cards on ${mode}: ${JSON.stringify(layout)}`)
+  assert(layout.comparisonInSettings, `The converted preview is not retained in the settings sidebar on ${mode}.`)
+  assert(layout.comparisonCardCount === 1, `Expected one compact converted preview card on ${mode}: ${JSON.stringify(layout)}`)
   assert(layout.comparisonNote?.text === 'プレビュー', `The comparison note still exposes implementation jargon on ${mode}: ${JSON.stringify(layout.comparisonNote)}`)
   assertVisibleRect(layout.comparisonMedia, `${mode} comparison media`)
-  assert(layout.comparisonMedia.height <= (mode === 'mobile' ? 124 : 184), `${mode} comparison media is not compact: ${JSON.stringify(layout.comparisonMedia)}`)
+  assert(layout.comparisonMedia.height <= (mode === 'mobile' ? 148 : 184), `${mode} comparison media is not compact: ${JSON.stringify(layout.comparisonMedia)}`)
   assertComparisonImagesFit(layout, mode)
   assertVisibleRect(layout.afterCard, `${mode} transformed preview card`)
   assert(layout.afterCard.top >= layout.comparisonSection.top, `The transformed preview card is outside the comparison section on ${mode}: ${JSON.stringify({ comparisonSection: layout.comparisonSection, afterCard: layout.afterCard })}`)
@@ -726,6 +745,8 @@ async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
   assert(layout.noHorizontalOverflow, `Loaded ${mode} layout overflows horizontally: ${JSON.stringify(layout)}`)
 
   if (mode === 'desktop') {
+    assertInsideViewport(layout.stageArea, viewport, 'desktop stage area')
+    assertInsideViewport(layout.editorActions, viewport, 'desktop crop action row')
     assert(layout.settings.left >= layout.editor.right - 1, `Desktop output settings are not in a right sidebar: ${JSON.stringify({ editor: layout.editor, settings: layout.settings })}`)
     assertInsideViewport(layout.outputFormat, viewport, 'desktop output format')
     assertInsideViewport(layout.quality, viewport, 'desktop quality')
@@ -733,11 +754,12 @@ async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
     assert(layout.outputFormat.fontSize >= 16 && layout.download.fontSize >= 16, `Desktop key output controls are too small: ${JSON.stringify({ outputFormat: layout.outputFormat, download: layout.download })}`)
   } else {
     assert(layout.settings.left <= layout.workspace.left + 1, `Mobile output settings did not align with the image workspace: ${JSON.stringify({ workspace: layout.workspace, settings: layout.settings })}`)
-    assert(layout.outputFormat.top > layout.cropSurface.bottom, `Mobile output controls do not follow the image workspace: ${JSON.stringify({ cropSurface: layout.cropSurface, outputFormat: layout.outputFormat })}`)
-    assertBeginsInViewport(layout.outputFormat, viewport, 'mobile output format')
-    assertBeginsInViewport(layout.quality, viewport, 'mobile quality')
+    assert(layout.settings.top >= layout.editorActions.bottom - 1, `Mobile output settings overlap the crop action row: ${JSON.stringify({ editorActions: layout.editorActions, settings: layout.settings })}`)
+    assert(layout.outputFormat.top > layout.editorActions.bottom, `Mobile output controls do not follow the image workspace: ${JSON.stringify({ editorActions: layout.editorActions, outputFormat: layout.outputFormat })}`)
+    assertVisibleRect(layout.outputFormat, 'mobile output format')
+    assertVisibleRect(layout.quality, 'mobile quality')
     assertVisibleRect(layout.download, 'mobile download')
-    assert(layout.comparisonSection.top > layout.settings.bottom, `Mobile before/after comparison does not follow the output settings: ${JSON.stringify({ comparisonSection: layout.comparisonSection, settings: layout.settings })}`)
+    assert(layout.comparisonSection.top >= layout.settings.top, `Mobile converted preview is outside the output settings flow: ${JSON.stringify({ comparisonSection: layout.comparisonSection, settings: layout.settings })}`)
     assert(layout.outputFormat.top < layout.advancedControls.top && layout.download.bottom < layout.advancedControls.top, `Mobile essential output/save controls do not precede advanced controls: ${JSON.stringify(layout)}`)
   }
   return layout
@@ -747,17 +769,49 @@ async function captureCropSurfaceSizing(cdp, sessionId) {
   return evaluate(cdp, sessionId, `(() => {
     const surface = document.querySelector('.crop-surface')
     const sourceImage = document.querySelector('.stage-image')
-    const workspace = document.querySelector('.workspace')
-    const parent = surface?.parentElement
-    const parentStyle = parent ? getComputedStyle(parent) : undefined
-    const availableRect = parent && parentStyle?.display !== 'contents'
-      ? parent.getBoundingClientRect()
-      : workspace?.getBoundingClientRect()
+    const stageArea = document.querySelector('.stage-area')
+    const stageAreaRect = stageArea?.getBoundingClientRect()
+    const stageAreaStyle = stageArea ? getComputedStyle(stageArea) : undefined
     const surfaceRect = surface?.getBoundingClientRect()
+    const sourceRect = sourceImage?.getBoundingClientRect()
+    const toPixels = (value) => Number.parseFloat(value) || 0
+    const contentBox = stageAreaRect && stageAreaStyle ? {
+      height: stageAreaRect.height -
+        toPixels(stageAreaStyle.paddingTop) -
+        toPixels(stageAreaStyle.paddingBottom) -
+        toPixels(stageAreaStyle.borderTopWidth) -
+        toPixels(stageAreaStyle.borderBottomWidth),
+      width: stageAreaRect.width -
+        toPixels(stageAreaStyle.paddingLeft) -
+        toPixels(stageAreaStyle.paddingRight) -
+        toPixels(stageAreaStyle.borderLeftWidth) -
+        toPixels(stageAreaStyle.borderRightWidth),
+    } : undefined
+    const describeBox = (rect) => rect ? {
+      bottom: rect.bottom,
+      height: rect.height,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      width: rect.width,
+    } : undefined
     return {
-      availableWidth: availableRect?.width,
+      availableHeight: contentBox?.height,
+      availableWidth: contentBox?.width,
       sourceNaturalHeight: sourceImage?.naturalHeight,
       sourceNaturalWidth: sourceImage?.naturalWidth,
+      sourceRect: describeBox(sourceRect),
+      sourceFitsSurface: Boolean(sourceRect && surfaceRect &&
+        sourceRect.left >= surfaceRect.left - 2 &&
+        sourceRect.right <= surfaceRect.right + 2 &&
+        sourceRect.top >= surfaceRect.top - 2 &&
+        sourceRect.bottom <= surfaceRect.bottom + 2),
+      stageArea: describeBox(stageAreaRect),
+      surfaceFitsStageArea: Boolean(surfaceRect && stageAreaRect &&
+        surfaceRect.left >= stageAreaRect.left - 2 &&
+        surfaceRect.right <= stageAreaRect.right + 2 &&
+        surfaceRect.top >= stageAreaRect.top - 2 &&
+        surfaceRect.bottom <= stageAreaRect.bottom + 2),
       surfaceHeight: surfaceRect?.height,
       surfaceRatio: surfaceRect ? surfaceRect.width / surfaceRect.height : undefined,
       surfaceWidth: surfaceRect?.width,
@@ -798,31 +852,30 @@ async function runCropSurfaceSizingRegression({ cdp, sessionId, layoutFixtures }
     await writeFile(fixture.path, Buffer.from(encodedFixture, 'base64'))
     await setFileInput(cdp, sessionId, fixture.path)
     const expectedDimensions = `${fixture.width} × ${fixture.height} px`
-    await waitForDom(
-      cdp,
-      sessionId,
-      `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === ${JSON.stringify(expectedDimensions)}`,
-      `${fixture.key} source dimensions`,
-    )
+    await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === ${JSON.stringify(expectedDimensions)}`, `${fixture.key} source dimensions`)
     await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, `${fixture.key} Worker preview`)
 
     const caseResults = {}
-    for (const [mode, viewport, heightCap] of [
-      ['desktop', DESKTOP_VIEWPORT, 320],
-      ['mobile', MOBILE_VIEWPORT, 200],
+    for (const [mode, viewport] of [
+      ['desktop', DESKTOP_VIEWPORT],
+      ['mobile', MOBILE_VIEWPORT],
     ]) {
       await setViewport(cdp, sessionId, viewport)
       await waitForDom(cdp, sessionId, `window.innerWidth === ${viewport.width} && window.innerHeight === ${viewport.height}`, `the ${mode} viewport for ${fixture.key}`)
       const layout = await captureCropSurfaceSizing(cdp, sessionId)
       const aspectRatio = fixture.width / fixture.height
-      const expectedWidth = Math.min(layout.availableWidth, heightCap * aspectRatio)
       assert(layout.sourceNaturalWidth === fixture.width && layout.sourceNaturalHeight === fixture.height, `${fixture.key} source dimensions were not decoded as expected: ${JSON.stringify(layout)}`)
-      assert(layout.availableWidth > 0, `${fixture.key} has no measurable ${mode} width: ${JSON.stringify(layout)}`)
-      assert(Math.abs(layout.surfaceWidth - expectedWidth) <= 2, `${fixture.key} did not use the expected ${mode} width: ${JSON.stringify({ layout, expectedWidth, heightCap })}`)
-      assert(layout.surfaceHeight <= heightCap + 2, `${fixture.key} exceeded the ${mode} crop surface height cap: ${JSON.stringify({ layout, heightCap })}`)
+      assert(layout.availableWidth > 0 && layout.availableHeight > 0, `${fixture.key} has no measurable ${mode} stage area: ${JSON.stringify(layout)}`)
+      assert(layout.surfaceWidth <= layout.availableWidth + 2 && layout.surfaceHeight <= layout.availableHeight + 2, `${fixture.key} escaped the ${mode} stage area bounds: ${JSON.stringify(layout)}`)
+      assert(layout.surfaceFitsStageArea, `${fixture.key} was not letterboxed within the ${mode} stage area: ${JSON.stringify(layout)}`)
+      assert(layout.sourceFitsSurface, `${fixture.key} whole source image was not contained by the ${mode} crop surface: ${JSON.stringify(layout)}`)
       assert(Math.abs(layout.surfaceRatio - aspectRatio) <= Math.max(0.05, aspectRatio * 0.01), `${fixture.key} changed its ${mode} aspect ratio: ${JSON.stringify({ layout, aspectRatio })}`)
+      assert(layout.stageArea.height >= (mode === 'desktop' ? 500 : 400), `${fixture.key} did not receive an enlarged ${mode} working area: ${JSON.stringify(layout)}`)
+      if (fixture.key === 'landscape-16-9') {
+        assert(Math.abs(layout.surfaceWidth - layout.availableWidth) <= 4, `${fixture.key} did not use the available ${mode} width: ${JSON.stringify(layout)}`)
+      }
       if (fixture.key === 'panorama-10-1') {
-        assert(Math.abs(layout.surfaceWidth - layout.availableWidth) <= 2, `${fixture.key} did not use the available ${mode} width: ${JSON.stringify(layout)}`)
+        assert(Math.abs(layout.surfaceWidth - layout.availableWidth) <= 4, `${fixture.key} did not use the available ${mode} width: ${JSON.stringify(layout)}`)
       }
       await captureScreenshot(cdp, sessionId, `${fixture.key}-${mode}.png`)
       caseResults[mode] = layout
@@ -1031,6 +1084,152 @@ async function setControlValue(cdp, sessionId, selector, value) {
   })()`)
 }
 
+async function runAspectAndGuideRegression({ cdp, sessionId }) {
+  const closedAdvancedState = await evaluate(cdp, sessionId, `(() => {
+    const details = document.querySelector('.advanced-controls')
+    const select = document.querySelector('#aspect-ratio')
+    const rect = select?.getBoundingClientRect()
+    return {
+      advancedOpen: details?.open ?? null,
+      inOutputCard: select?.closest('.output-card') !== null,
+      value: select?.value ?? '',
+      visible: Boolean(rect && rect.width > 0 && rect.height > 0),
+    }
+  })()`)
+  assert(closedAdvancedState.advancedOpen === false, `Aspect ratio control was not reachable with advanced controls closed: ${JSON.stringify(closedAdvancedState)}`)
+  assert(closedAdvancedState.inOutputCard && closedAdvancedState.visible, `Aspect ratio control was not moved next to output size: ${JSON.stringify(closedAdvancedState)}`)
+  assert(closedAdvancedState.value === 'original', `The initial aspect ratio preset changed unexpectedly: ${JSON.stringify(closedAdvancedState)}`)
+
+  const readAspectState = () => evaluate(cdp, sessionId, `(() => {
+    const readDimensions = (selector) => {
+      const text = document.querySelector(selector)?.textContent?.trim() ?? ''
+      const values = text.replace(' px', '').split(' × ').map(Number)
+      return values.length === 2 && values.every((value) => Number.isFinite(value))
+        ? { width: values[0], height: values[1] }
+        : null
+    }
+    const cropValues = [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value))
+    return {
+      aspect: document.querySelector('#aspect-ratio')?.value ?? '',
+      after: readDimensions('.after-card figcaption span:last-child'),
+      crop: cropValues.length === 4 && cropValues.every((value) => Number.isFinite(value))
+        ? { x: cropValues[0], y: cropValues[1], width: cropValues[2], height: cropValues[3] }
+        : null,
+      output: readDimensions('.effective-size strong'),
+      previewUrl: document.querySelector('.after-card img')?.src ?? '',
+      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
+    }
+  })()`)
+
+  const aspectCases = [
+    { label: 'landscape', value: '4:3', ratio: 4 / 3 },
+    { label: 'portrait', value: '3:4', ratio: 3 / 4 },
+    { label: 'square', value: '1:1', ratio: 1 },
+  ]
+  const aspectResults = {}
+  for (const aspectCase of aspectCases) {
+    await setControlValue(cdp, sessionId, '#aspect-ratio', aspectCase.value)
+    const state = await waitFor(async () => {
+      const next = await readAspectState()
+      if (
+        next.aspect === aspectCase.value &&
+        next.status === 'プレビュー準備完了' &&
+        next.crop &&
+        next.output &&
+        next.after &&
+        next.previewUrl.startsWith('blob:') &&
+        next.output.width === next.after.width &&
+        next.output.height === next.after.height
+      ) {
+        return next
+      }
+      throw new Error(`Aspect regression state is not ready: ${JSON.stringify(next)}`)
+    }, `${aspectCase.label} aspect crop and output`)
+    const cropRatio = state.crop.width / state.crop.height
+    const outputRatio = state.output.width / state.output.height
+    assert(Math.abs(cropRatio - aspectCase.ratio) <= 0.02, `${aspectCase.label} crop ratio changed unexpectedly: ${JSON.stringify({ state, expected: aspectCase.ratio, actual: cropRatio })}`)
+    assert(Math.abs(outputRatio - aspectCase.ratio) <= 0.02, `${aspectCase.label} output ratio changed unexpectedly: ${JSON.stringify({ state, expected: aspectCase.ratio, actual: outputRatio })}`)
+    aspectResults[aspectCase.label] = {
+      crop: state.crop,
+      cropRatio,
+      output: state.output,
+      outputRatio,
+    }
+  }
+
+  await clickButton(cdp, sessionId, '編集をリセット')
+  await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === 'original' && [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '0,0,16,32' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the original full crop before guide regression')
+
+  const readGuideState = () => evaluate(cdp, sessionId, `(() => {
+    const guide = document.querySelector('.crop-guide')
+    const crop = document.querySelector('.crop-rectangle')
+    const guideRect = guide?.getBoundingClientRect()
+    const cropRect = crop?.getBoundingClientRect()
+    const style = guide ? getComputedStyle(guide) : null
+    return {
+      ariaHidden: guide?.getAttribute('aria-hidden') ?? null,
+      className: guide?.getAttribute('class') ?? '',
+      display: style?.display ?? null,
+      guideInsideCrop: Boolean(guideRect && cropRect &&
+        guideRect.left >= cropRect.left - 1 &&
+        guideRect.right <= cropRect.right + 1 &&
+        guideRect.top >= cropRect.top - 1 &&
+        guideRect.bottom <= cropRect.bottom + 1),
+      pointerEvents: style?.pointerEvents ?? null,
+      previewUrl: document.querySelector('.after-card img')?.src ?? '',
+      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
+      value: document.querySelector('#composition-guide')?.value ?? '',
+      visible: Boolean(guideRect && guideRect.width > 0 && guideRect.height > 0 && style?.display !== 'none' && style?.visibility !== 'hidden'),
+    }
+  })()`)
+
+  const initialGuideState = await readGuideState()
+  assert(initialGuideState.value === 'thirds' && initialGuideState.visible, `Composition guide did not default to thirds: ${JSON.stringify(initialGuideState)}`)
+  const guidePreviewUrl = initialGuideState.previewUrl
+  const guideBaselinePixels = await capturePixelEvidence(cdp, sessionId)
+  const guideResults = {}
+  let guideScreenshot
+  for (const guideCase of [
+    { value: 'thirds', visible: true },
+    { value: 'golden', visible: true },
+    { value: 'diagonal', visible: true },
+    { value: 'none', visible: false },
+  ]) {
+    await setControlValue(cdp, sessionId, '#composition-guide', guideCase.value)
+    const state = await waitFor(async () => {
+      const next = await readGuideState()
+      if (next.value === guideCase.value && next.status === 'プレビュー準備完了' && next.previewUrl === guidePreviewUrl) {
+        return next
+      }
+      throw new Error(`Composition guide regression state is not ready: ${JSON.stringify(next)}`)
+    }, `${guideCase.value} composition guide without preview regeneration`)
+    assert(state.ariaHidden === 'true' && state.pointerEvents === 'none', `${guideCase.value} guide is not a passive accessible overlay: ${JSON.stringify(state)}`)
+    assert(state.visible === guideCase.visible, `${guideCase.value} guide visibility changed unexpectedly: ${JSON.stringify(state)}`)
+    if (guideCase.visible) {
+      assert(state.guideInsideCrop, `${guideCase.value} guide escaped the crop rectangle: ${JSON.stringify(state)}`)
+    }
+    if (guideCase.value === 'golden') {
+      guideScreenshot = await captureScreenshot(cdp, sessionId, 'composition-guide-golden.png')
+    }
+    guideResults[guideCase.value] = state
+  }
+
+  const guideAfterPixels = await capturePixelEvidence(cdp, sessionId)
+  assert(JSON.stringify(guideAfterPixels.crop) === JSON.stringify(guideBaselinePixels.crop), `Composition guides changed crop geometry: ${JSON.stringify({ before: guideBaselinePixels.crop, after: guideAfterPixels.crop })}`)
+  assert(guideAfterPixels.preview.width === guideBaselinePixels.preview.width && guideAfterPixels.preview.height === guideBaselinePixels.preview.height, `Composition guides changed export dimensions: ${JSON.stringify({ before: guideBaselinePixels.preview, after: guideAfterPixels.preview })}`)
+  assert(guideAfterPixels.preview.pixels.every((pixel, index) => pixel === guideBaselinePixels.preview.pixels[index]), 'Composition guides changed the rendered preview pixels.')
+  assert(guideAfterPixels.stageTransform === guideBaselinePixels.stageTransform, 'Composition guides changed the image transform.')
+
+  await setControlValue(cdp, sessionId, '#composition-guide', 'thirds')
+  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.after-card img')?.src === ${JSON.stringify(guidePreviewUrl)}`, 'the default thirds guide after regression')
+
+  return {
+    aspectCases: aspectResults,
+    guideCases: guideResults,
+    screenshot: guideScreenshot,
+  }
+}
+
 async function dragCropRectangle(cdp, sessionId, direction) {
   const points = await evaluate(cdp, sessionId, `(() => {
     const surface = document.querySelector('.crop-surface')
@@ -1139,7 +1338,7 @@ async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadD
   await writeFile(cropDragFixturePath, Buffer.from(encodedFixture, 'base64'))
 
   await setFileInput(cdp, sessionId, cropDragFixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === '1000 × 600 px'`, 'the crop drag regression source dimensions')
+  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '1000 × 600 px'`, 'the crop drag regression source dimensions')
   await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag regression initial preview')
   await evaluate(cdp, sessionId, `(() => {
     const details = document.querySelector('.advanced-controls')
@@ -1575,7 +1774,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport before initial drop')
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
   await waitForFileLoad(cdp, sessionId)
-  await waitForDom(cdp, sessionId, `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === '16 × 32 px'`, 'the normalized source dimensions')
+  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '16 × 32 px'`, 'the normalized source dimensions')
   await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the initial Worker preview')
   await assertLoadedFirstView(cdp, sessionId, DESKTOP_VIEWPORT, 'desktop')
   screenshots.loadedDesktop = await captureScreenshot(cdp, sessionId, 'loaded-desktop.png')
@@ -1590,13 +1789,17 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
     return typeof sourceImage?.src === 'string' && sourceImage.src.length > 0 && sourceImage.src !== ${JSON.stringify(stageSrcBeforeNativeSelection)}
   })()`, 'the native file input to replace the stage image')
   await waitForFileLoad(cdp, sessionId)
-  await waitForDom(cdp, sessionId, `document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim() === '16 × 32 px'`, 'the native file input source dimensions')
+  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '16 × 32 px'`, 'the native file input source dimensions')
   await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the initial Worker preview after native file selection')
   await dispatchFileDrop(cdp, sessionId, '.change-image-button', fixturePath, 'e2e-metadata-fixture-replacement.jpg')
   await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.alt === 'e2e-metadata-fixture-replacement.jpg の編集対象'`, 'the loaded change-image drop replacement')
   await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the replacement Worker preview')
   await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
   await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after mobile layout checks')
+  const aspectAndGuideRegression = await runAspectAndGuideRegression({ cdp, sessionId })
+  if (aspectAndGuideRegression.screenshot) {
+    screenshots.compositionGuide = aspectAndGuideRegression.screenshot
+  }
   await openDetails(cdp, sessionId, '.advanced-controls')
 
   const initialLayout = await evaluate(cdp, sessionId, `(() => {
@@ -1605,20 +1808,21 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
     const rect = surface?.getBoundingClientRect()
     const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
     return {
-      sourceDimensions: document.querySelector('.comparison-card:first-child figcaption span:last-child')?.textContent?.trim(),
+      sourceDimensions: document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim(),
       sourceNaturalHeight: sourceImage?.naturalHeight,
       sourceNaturalWidth: sourceImage?.naturalWidth,
       surfaceHeight: rect?.height,
       surfaceRatio: rect ? rect.width / rect.height : undefined,
       surfaceWidth: rect?.width,
-      heightCapPx: 320,
+      stageAreaHeight: document.querySelector('.stage-area')?.getBoundingClientRect().height,
       rootFontSize,
     }
   })()`)
   assert(initialLayout.sourceDimensions === '16 × 32 px', `App source dimensions were not normalized: ${JSON.stringify(initialLayout)}`)
   assert(initialLayout.sourceNaturalWidth === 16 && initialLayout.sourceNaturalHeight === 32, `Source img natural dimensions were not normalized: ${JSON.stringify(initialLayout)}`)
   assert(Math.abs(initialLayout.surfaceRatio - 0.5) <= 0.01, `Portrait crop surface ratio was not preserved: ${JSON.stringify(initialLayout)}`)
-  assert(initialLayout.surfaceHeight <= initialLayout.heightCapPx + 1, `Desktop crop surface exceeded the useful height cap: ${JSON.stringify(initialLayout)}`)
+  assert(initialLayout.stageAreaHeight >= 500, `Desktop stage area is not large enough for the full-window editor: ${JSON.stringify(initialLayout)}`)
+  assert(initialLayout.surfaceHeight > 320, `Desktop portrait crop surface did not grow beyond the retired height cap: ${JSON.stringify(initialLayout)}`)
 
   await setControlValue(cdp, sessionId, '#aspect-ratio', '1:1')
   await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === '1:1'`, 'the 1:1 preset')
@@ -1713,6 +1917,9 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
     behavior: 'allow',
     downloadPath: downloadDirectory,
   })
+  const exportPreviewUrlBeforeGuide = await evaluate(cdp, sessionId, "document.querySelector('.after-card img')?.src ?? ''")
+  await setControlValue(cdp, sessionId, '#composition-guide', 'golden')
+  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'golden' && document.querySelector('.after-card img')?.src === ${JSON.stringify(exportPreviewUrlBeforeGuide)} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the unchanged preview before guide-visible export')
   await clickButton(cdp, sessionId, 'ダウンロード')
   const downloadedFilename = 'e2e-metadata-fixture-replacement-edited.jpg'
   const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
@@ -1721,6 +1928,9 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   const outputFamilies = detectMetadataFamilies(outputBytes)
   assert(outputDimensions.width === 16 && outputDimensions.height === 16, `Downloaded JPEG dimensions were ${outputDimensions.width}x${outputDimensions.height}, expected 16x16.`)
   assert(Object.values(outputFamilies).every((value) => value === false), `Injected JPEG metadata remained in output: ${JSON.stringify(outputFamilies)}`)
+  const exportPreviewUrlAfterExport = await evaluate(cdp, sessionId, "document.querySelector('.after-card img')?.src ?? ''")
+  await setControlValue(cdp, sessionId, '#composition-guide', 'thirds')
+  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.after-card img')?.src === ${JSON.stringify(exportPreviewUrlAfterExport)}`, 'the default guide after guide-visible export')
 
   const cropDragRegression = await runCropDragBoundsRegression({
     cdp,
@@ -1737,6 +1947,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   const targetInfo = await getTargetInfo(cdp, targetId)
   return {
     browserTarget: targetInfo ? { targetId: targetInfo.targetId, type: targetInfo.type, url: targetInfo.url } : undefined,
+    aspectAndGuideRegression,
     dimensions: outputDimensions,
     downloadedBytes: outputBytes.length,
     downloadedFilename: basename(downloadedPath),
