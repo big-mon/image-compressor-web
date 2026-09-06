@@ -109,6 +109,7 @@ function App() {
   const [dragging, setDragging] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [processorReady, setProcessorReady] = useState(false)
+  const [processorError, setProcessorError] = useState('')
   const processorRef = useRef<RasterProcessor | undefined>(undefined)
   const sourceUrlRef = useRef<string | undefined>(undefined)
   const renderedUrlRef = useRef<string | undefined>(undefined)
@@ -190,6 +191,11 @@ function App() {
     setBusy(true)
   }
 
+  const beginFileSelection = () => {
+    invalidateResultIntent()
+    releaseOriginalComparison()
+  }
+
   const adoptRenderedResult = (result: RasterResult, isPreview: boolean): string => {
     if (renderedUrlRef.current) {
       URL.revokeObjectURL(renderedUrlRef.current)
@@ -207,9 +213,12 @@ function App() {
     try {
       processor = createRasterProcessor()
       processorRef.current = processor
+      setProcessorError('')
       setProcessorReady(true)
     } catch (error) {
-      setErrorMessage(getErrorMessage(error, '画像処理ワーカーを起動できませんでした。'))
+      const message = getErrorMessage(error, '画像処理ワーカーを起動できませんでした。')
+      setProcessorError(message)
+      setErrorMessage(message)
     }
 
     return () => {
@@ -231,11 +240,22 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!asset || !editState || !geometry || !processorReady) {
+    if (!asset || !editState || !geometry) {
+      return undefined
+    }
+    if (!processorReady) {
+      if (processorError) {
+        setPreviewPending(false)
+        setBusy(false)
+        setErrorMessage(processorError)
+      }
       return undefined
     }
     const processor = processorRef.current
     if (!processor) {
+      setPreviewPending(false)
+      setBusy(false)
+      setErrorMessage(processorError || '画像処理ワーカーを起動できませんでした。')
       return undefined
     }
 
@@ -288,39 +308,51 @@ function App() {
     }, 160)
 
     return () => window.clearTimeout(timeoutId)
-  }, [asset, editState, geometry, outputMime, processorReady, quality])
+  }, [asset, editState, geometry, outputMime, processorError, processorReady, quality])
 
   const handleFile = async (file: File | undefined) => {
     if (!file) {
       return
     }
     const loadGeneration = ++fileLoadGenerationRef.current
-    invalidateResultIntent()
+    beginFileSelection()
     const mimeType = file.type.toLowerCase()
     if (!isSupportedImageMimeType(mimeType)) {
-      releaseOriginalComparison()
       setPreviewPending(false)
       setBusy(false)
       setErrorMessage('JPEG、PNG、WebP の画像だけを選択してください。')
       return
     }
 
-    invalidatePreview()
+    setPreviewPending(true)
     setBusy(true)
-    setErrorMessage('')
+    setErrorMessage(processorError)
     try {
       const pixels = await decodeImageFile(file)
       if (fileLoadGenerationRef.current !== loadGeneration) {
         return
       }
       const objectUrl = URL.createObjectURL(file)
+      try {
+        processorRef.current?.clearSource()
+      } catch (error) {
+        URL.revokeObjectURL(objectUrl)
+        throw error
+      }
+      releaseRenderedUrl()
       if (sourceUrlRef.current) {
         URL.revokeObjectURL(sourceUrlRef.current)
       }
       sourceUrlRef.current = objectUrl
-      processorRef.current?.clearSource()
       setAsset({ file, pixels, objectUrl })
       setEditState(createEditState({ width: pixels.width, height: pixels.height }))
+      if (!processorRef.current) {
+        setPreviewPending(false)
+        setBusy(false)
+        setErrorMessage(processorError || '画像処理ワーカーを起動できませんでした。')
+      } else {
+        setErrorMessage('')
+      }
     } catch (error) {
       if (fileLoadGenerationRef.current !== loadGeneration) {
         return
@@ -691,7 +723,7 @@ function App() {
           <div className="toolbar-actions">
             {asset ? (
               <span className={`status-chip${busy ? ' is-busy' : ''}`} role="status" aria-live="polite">
-                {busy ? (previewPending ? '圧縮プレビューを更新中…' : '処理中…') : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
+                {busy ? (previewPending ? '圧縮プレビューを更新中…' : '処理中…') : renderedResult ? 'プレビュー準備完了' : errorMessage ? 'エラー' : '画像を準備中'}
               </span>
             ) : null}
             {asset ? (

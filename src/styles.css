@@ -336,7 +336,7 @@ h2 {
   background-color: #eef1ee;
   background-image: repeating-conic-gradient(#eef1ee 0 25%, #cbd2cf 0 50%);
   background-size: 1rem 1rem;
-  object-fit: fill;
+  object-fit: contain;
 }
 
 .processed-preview-pending {

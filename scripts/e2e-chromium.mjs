@@ -669,6 +669,7 @@ async function captureToolLayout(cdp, sessionId) {
       settings: describe('.settings-column'),
       sourceImageCount: document.querySelectorAll('.stage-image').length,
       sourceMetrics: describe('.metrics-card .metric-line:first-child strong'),
+      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
       stageArea: describe('.stage-area'),
       workspace: describe('.workspace'),
       download: describe('.download-button'),
@@ -782,7 +783,7 @@ function assertProcessedPreviewAligned(layout, mode) {
   const description = `${mode} processed preview image`
   assert(layout.processedPreviewCount === 1 && preview, `Expected one in-stage processed preview on ${mode}: ${JSON.stringify(layout)}`)
   assertVisibleRect(preview.image, description)
-  assert(preview.objectFit === 'fill', `${description} does not fill its crop bounds: ${JSON.stringify(preview)}`)
+  assert(preview.objectFit === 'contain', `${description} does not preserve its encoded aspect inside the crop bounds: ${JSON.stringify(preview)}`)
   assert(preview.minWidth === '0px' && preview.minHeight === '0px', `${description} uses crop-rectangle minimum bounds: ${JSON.stringify(preview)}`)
   assert(preview.naturalWidth === layout.renderedSize?.width && preview.naturalHeight === layout.renderedSize?.height, `${description} natural dimensions do not match the rendered metrics: ${JSON.stringify({ preview, renderedSize: layout.renderedSize })}`)
   assert(layout.cropRectangle && Math.abs(preview.image.left - layout.cropRectangle.left) <= 1 && Math.abs(preview.image.right - layout.cropRectangle.right) <= 1 && Math.abs(preview.image.top - layout.cropRectangle.top) <= 1 && Math.abs(preview.image.bottom - layout.cropRectangle.bottom) <= 1, `${description} is not mapped to the crop rectangle: ${JSON.stringify({ crop: layout.cropRectangle, preview: preview.image })}`)
@@ -1145,6 +1146,85 @@ async function runStaticContentRegression({ basePath, cdp, origin, pageUrl }) {
         await cdp.send('Emulation.setScriptExecutionDisabled', { value: false }, sessionId)
       } catch {
         // The isolated target may already be gone after a failed navigation.
+      }
+    }
+    try {
+      await cdp.send('Target.closeTarget', { targetId })
+    } catch {
+      // Chrome may already have exited after a failed test.
+    }
+  }
+}
+
+async function runProcessorStartupFailureRegression({ allowedPaths, cdp, fixturePath, origin, pageUrl, requestLog }) {
+  const target = await cdp.send('Target.createTarget', { url: 'about:blank' })
+  const targetId = target.targetId
+  let sessionId
+  let scriptIdentifier
+  try {
+    const attached = await cdp.send('Target.attachToTarget', { flatten: true, targetId })
+    sessionId = attached.sessionId
+    await cdp.send('Network.enable', {}, sessionId)
+    await cdp.send('Runtime.enable', {}, sessionId)
+    await cdp.send('Log.enable', {}, sessionId)
+    await cdp.send('Page.enable', {}, sessionId)
+    const diagnostics = new BrowserDiagnostics(cdp, sessionId)
+    const network = new NetworkRecorder(cdp, sessionId)
+    const script = await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `(() => {
+        window.Worker = class ForcedWorkerStartupFailure {
+          constructor() {
+            throw new Error('E2E forced Worker startup failure')
+          }
+        }
+      })()`,
+    }, sessionId)
+    scriptIdentifier = script.identifier
+
+    await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
+    await cdp.send('Page.navigate', { url: pageUrl }, sessionId)
+    await waitForDom(cdp, sessionId, `document.readyState === 'complete' && document.querySelector('input[type="file"]') !== null`, 'the isolated Worker startup-failure page to load')
+    await setFileInput(cdp, sessionId, fixturePath)
+    await waitForFileLoad(cdp, sessionId)
+    const state = await waitFor(async () => {
+      const next = await evaluate(cdp, sessionId, `(() => ({
+        assetPresent: document.querySelector('.stage-image') !== null,
+        busy: document.querySelector('.status-chip')?.classList.contains('is-busy') ?? false,
+        downloadDisabled: document.querySelector('.download-button')?.disabled ?? false,
+        error: document.querySelector('.error-message')?.textContent?.trim() ?? '',
+        pending: document.querySelector('.processed-preview-pending') !== null,
+        status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
+      }))()`)
+      if (
+        next.assetPresent &&
+        next.error.includes('E2E forced Worker startup failure') &&
+        next.status === 'エラー' &&
+        next.busy === false &&
+        next.pending === false &&
+        next.downloadDisabled === true
+      ) {
+        return next
+      }
+      throw new Error(`Worker startup-failure UI has not settled: ${JSON.stringify(next)}`)
+    }, 'the actionable Worker startup error without an endless pending state')
+    await delay(200)
+    const settled = await evaluate(cdp, sessionId, `(() => ({
+      busy: document.querySelector('.status-chip')?.classList.contains('is-busy') ?? false,
+      downloadDisabled: document.querySelector('.download-button')?.disabled ?? false,
+      error: document.querySelector('.error-message')?.textContent?.trim() ?? '',
+      pending: document.querySelector('.processed-preview-pending') !== null,
+      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
+    }))()`)
+    assert(settled.error.includes('E2E forced Worker startup failure') && settled.status === 'エラー' && settled.busy === false && settled.pending === false && settled.downloadDisabled === true, `Worker startup failure regressed into a pending or enabled state: ${JSON.stringify(settled)}`)
+    diagnostics.assertClean()
+    assertNetworkIsLocal(network.getObservedRequests(), origin, { allowedPaths, requestLog })
+    return { initial: state, settled }
+  } finally {
+    if (sessionId && scriptIdentifier) {
+      try {
+        await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: scriptIdentifier }, sessionId)
+      } catch {
+        // The isolated target may already be gone after a failed regression.
       }
     }
     try {
@@ -2018,6 +2098,172 @@ async function runComparisonHoldRegression({ cdp, sessionId }) {
   }
 }
 
+async function runCorruptReplacementRegression({ cdp, corruptFixturePath, downloadDirectory, sessionId }) {
+  const before = await evaluate(cdp, sessionId, `(() => ({
+    crop: [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value),
+    previewUrl: document.querySelector('.processed-preview')?.src ?? '',
+    sourceUrl: document.querySelector('.stage-image')?.src ?? '',
+  }))()`)
+  assert(before.previewUrl.startsWith('blob:') && before.sourceUrl.startsWith('blob:'), `The corrupt replacement regression has no stable source/preview URLs: ${JSON.stringify(before)}`)
+
+  await setFileInput(cdp, sessionId, corruptFixturePath)
+  const restored = await waitFor(async () => {
+    const state = await evaluate(cdp, sessionId, `(() => ({
+      busy: document.querySelector('.status-chip')?.classList.contains('is-busy') ?? false,
+      crop: [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value),
+      downloadDisabled: document.querySelector('.download-button')?.disabled ?? true,
+      error: document.querySelector('.error-message')?.textContent?.trim() ?? '',
+      pending: document.querySelector('.processed-preview-pending') !== null,
+      previewUrl: document.querySelector('.processed-preview')?.src ?? '',
+      sourceUrl: document.querySelector('.stage-image')?.src ?? '',
+      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
+    }))()`)
+    if (
+      state.error.length > 0 &&
+      state.status === 'プレビュー準備完了' &&
+      state.busy === false &&
+      state.pending === false &&
+      state.downloadDisabled === false &&
+      state.previewUrl === before.previewUrl &&
+      state.sourceUrl === before.sourceUrl &&
+      JSON.stringify(state.crop) === JSON.stringify(before.crop)
+    ) {
+      return state
+    }
+    throw new Error(`Corrupt replacement has not restored the previous usable result: ${JSON.stringify(state)}`)
+  }, 'the previous preview after corrupt replacement')
+
+  await clickButton(cdp, sessionId, 'ダウンロード')
+  const downloadedFilename = 'e2e-metadata-fixture-edited.jpg'
+  const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
+  const downloadedBytes = new Uint8Array(await readFile(downloadedPath))
+  assert(downloadedBytes.length > 0, `The download after corrupt replacement was empty: ${downloadedFilename}`)
+
+  return {
+    before,
+    downloadedBytes: downloadedBytes.length,
+    downloadedFilename: basename(downloadedPath),
+    restored,
+  }
+}
+
+async function runRoundedPreviewRegression({ cdp, fixturePath, sessionId }) {
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport for the rounded preview')
+  const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 5
+    canvas.height = 5
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Could not create a 2D canvas context for the rounded preview fixture.')
+    const colors = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f']
+    for (let row = 0; row < 5; row += 1) {
+      for (let column = 0; column < 5; column += 1) {
+        context.fillStyle = colors[(row < 3 ? 0 : 2) + (column < 3 ? 0 : 1)]
+        context.fillRect(column, row, 1, 1)
+      }
+    }
+    return canvas.toDataURL('image/png')
+  })()`)
+  const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
+  assert(encodedFixture, 'Rounded preview fixture did not encode as a PNG data URL.')
+  await writeFile(fixturePath, Buffer.from(encodedFixture, 'base64'))
+
+  await setFileInput(cdp, sessionId, fixturePath)
+  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '5 × 5 px'`, 'the rounded preview source dimensions')
+  await setControlValue(cdp, sessionId, '#aspect-ratio', '4:3')
+  const layout = await waitFor(async () => {
+    const next = await captureToolLayout(cdp, sessionId)
+    if (
+      next.status === 'プレビュー準備完了' &&
+      next.renderedSize?.width === 5 &&
+      next.renderedSize?.height === 4 &&
+      next.processedPreview?.naturalWidth === 5 &&
+      next.processedPreview?.naturalHeight === 4
+    ) {
+      return next
+    }
+    throw new Error(`Rounded preview is not ready with a real 5 x 4 output: ${JSON.stringify(next)}`)
+  }, 'the real 5 x 4 rounded preview')
+
+  assertProcessedPreviewAligned(layout, 'rounded 5 x 4')
+  const preview = layout.processedPreview
+  const crop = layout.cropRectangle
+  assert(preview && crop, `Rounded preview geometry is missing: ${JSON.stringify(layout)}`)
+  const naturalRatio = preview.naturalWidth / preview.naturalHeight
+  const cropRatio = preview.image.width / preview.image.height
+  const containedWidth = Math.min(preview.image.width, preview.image.height * naturalRatio)
+  const containedHeight = Math.min(preview.image.height, preview.image.width / naturalRatio)
+  assert(Math.abs(naturalRatio - 1.25) <= 0.001, `Rounded preview natural aspect changed unexpectedly: ${JSON.stringify({ preview, naturalRatio })}`)
+  assert(Math.abs(cropRatio - 4 / 3) <= 0.01, `Rounded preview crop bounds changed unexpectedly: ${JSON.stringify({ crop, preview, cropRatio })}`)
+  assert(preview.objectFit === 'contain' && containedWidth < preview.image.width - 1 && Math.abs(containedHeight - preview.image.height) <= 1, `Rounded preview content is not letterboxed without distortion: ${JSON.stringify({ crop, preview, naturalRatio, cropRatio, containedWidth, containedHeight })}`)
+  assert(preview.backgroundColor !== 'rgba(0, 0, 0, 0)' && preview.backgroundImage !== 'none', `Rounded preview letterboxing has no opaque checker background: ${JSON.stringify(preview)}`)
+
+  const sourceUrl = await evaluate(cdp, sessionId, "document.querySelector('.stage-image')?.src ?? ''")
+  const buttonPoint = await evaluate(cdp, sessionId, `(() => {
+    const button = document.querySelector('.comparison-hold-button')
+    if (!(button instanceof HTMLElement)) throw new Error('Comparison hold button is missing for rounded preview.')
+    const rect = button.getBoundingClientRect()
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 }
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: buttonPoint.x,
+    y: buttonPoint.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  }, sessionId)
+  const held = await waitFor(async () => {
+    const state = await evaluate(cdp, sessionId, `(() => {
+      const source = document.querySelector('.stage-image')
+      const preview = document.querySelector('.processed-preview')
+      return {
+        label: document.querySelector('.stage-preview-label')?.textContent?.trim() ?? '',
+        previewVisibility: preview ? getComputedStyle(preview).visibility : '',
+        sourceUrl: source?.src ?? '',
+        sourceVisibility: source ? getComputedStyle(source).visibility : '',
+      }
+    })()`)
+    if (state.label === '元画像' && state.previewVisibility === 'hidden' && state.sourceVisibility === 'visible') {
+      return state
+    }
+    throw new Error(`Rounded preview hold did not show the source: ${JSON.stringify(state)}`)
+  }, 'the source during the rounded preview hold')
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: 2,
+    y: 2,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  }, sessionId)
+  const restored = await waitFor(async () => {
+    const state = await evaluate(cdp, sessionId, `(() => {
+      const source = document.querySelector('.stage-image')
+      const preview = document.querySelector('.processed-preview')
+      return {
+        label: document.querySelector('.stage-preview-label')?.textContent?.trim() ?? '',
+        previewVisibility: preview ? getComputedStyle(preview).visibility : '',
+        sourceUrl: source?.src ?? '',
+      }
+    })()`)
+    if (state.label === '圧縮後' && state.previewVisibility === 'visible' && state.sourceUrl === sourceUrl) {
+      return state
+    }
+    throw new Error(`Rounded preview hold did not restore the source comparison: ${JSON.stringify(state)}`)
+  }, 'the compressed preview after the rounded preview hold')
+
+  return {
+    contained: { height: containedHeight, width: containedWidth },
+    cropRatio,
+    held,
+    naturalRatio,
+    output: layout.renderedSize,
+    restored,
+  }
+}
+
 async function runTransparencyComparisonRegression({ cdp, sessionId, fixturePath }) {
   const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
     const canvas = document.createElement('canvas')
@@ -2105,7 +2351,7 @@ async function runTransparencyComparisonRegression({ cdp, sessionId, fixturePath
   return evidence
 }
 
-async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation, transparencyFixturePath }) {
+async function runScenario({ allowedPaths, basePath, corruptFixturePath, cropDragFixturePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, roundedPreviewFixturePath, sourceFamilies, sourceOrientation, transparencyFixturePath }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
   const screenshots = {}
@@ -2141,6 +2387,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the mobile viewport')
   await assertLoadedFirstView(cdp, sessionId, MOBILE_VIEWPORT, 'mobile')
   screenshots.loadedMobile = await captureScreenshot(cdp, sessionId, 'loaded-mobile.png')
+  const corruptionRegression = await runCorruptReplacementRegression({ cdp, corruptFixturePath, downloadDirectory, sessionId })
   const stageSrcBeforeNativeSelection = await evaluate(cdp, sessionId, "document.querySelector('.stage-image')?.src ?? ''")
   await setFileInput(cdp, sessionId, fixturePath)
   await waitForDom(cdp, sessionId, `(() => {
@@ -2322,6 +2569,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   })
 
   const cropSurfaceSizing = await runCropSurfaceSizingRegression({ cdp, layoutFixtures, sessionId })
+  const roundedPreviewRegression = await runRoundedPreviewRegression({ cdp, fixturePath: roundedPreviewFixturePath, sessionId })
   const transparencyComparisonRegression = await runTransparencyComparisonRegression({ cdp, fixturePath: transparencyFixturePath, sessionId })
   diagnostics.assertClean()
 
@@ -2332,6 +2580,8 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
     browserTarget: targetInfo ? { targetId: targetInfo.targetId, type: targetInfo.type, url: targetInfo.url } : undefined,
     aspectAndGuideRegression,
     comparisonHoldRegression,
+    corruptionRegression,
+    roundedPreviewRegression,
     tabletSaveLayoutRegression,
     dimensions: outputDimensions,
     downloadedBytes: outputBytes.length,
@@ -2364,7 +2614,9 @@ async function main() {
   const profileDirectory = join(temporaryRoot, 'chrome-profile')
   const downloadDirectory = join(temporaryRoot, 'downloads')
   const fixturePath = join(temporaryRoot, 'e2e-metadata-fixture.jpg')
+  const corruptFixturePath = join(temporaryRoot, 'e2e-corrupt-replacement.jpg')
   const cropDragFixturePath = join(temporaryRoot, 'e2e-crop-drag.png')
+  const roundedPreviewFixturePath = join(temporaryRoot, 'e2e-rounded-preview.png')
   const transparencyFixturePath = join(temporaryRoot, 'e2e-transparent.png')
   const layoutFixtures = CROP_SURFACE_SIZING_CASES.map((fixture) => ({
     ...fixture,
@@ -2387,6 +2639,7 @@ async function main() {
     assert(Object.values(sourceFamilies).every((value) => value === true), `Generated fixture is missing metadata families: ${JSON.stringify(sourceFamilies)}`)
     assert(sourceOrientation === 6, `Generated fixture EXIF orientation was ${sourceOrientation}, expected 6.`)
     await writeFile(fixturePath, fixtureBytes)
+    await writeFile(corruptFixturePath, Buffer.from('not a valid JPEG fixture'))
 
     staticServer = await startStaticServer(basePath)
     const fallbackResponse = await fetch(`${staticServer.origin}${basePath}e2e-spa-fallback`, {
@@ -2411,6 +2664,7 @@ async function main() {
     report = await runScenario({
       allowedPaths,
       basePath,
+      corruptFixturePath,
       cropDragFixturePath,
       cdp,
       downloadDirectory,
@@ -2419,11 +2673,20 @@ async function main() {
       origin: staticServer.origin,
       pageUrl: staticServer.pageUrl,
       requestLog: staticServer.requestLog,
+      roundedPreviewFixturePath,
       sessionId: pageSessionId,
       sourceFamilies,
       sourceOrientation,
       transparencyFixturePath,
       targetId: pageTargetId,
+    })
+    report.processorStartupFailure = await runProcessorStartupFailureRegression({
+      allowedPaths,
+      cdp,
+      fixturePath,
+      origin: staticServer.origin,
+      pageUrl: staticServer.pageUrl,
+      requestLog: staticServer.requestLog,
     })
     report.staticContentRegression = await runStaticContentRegression({
       basePath,
