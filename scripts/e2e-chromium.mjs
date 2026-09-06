@@ -542,20 +542,16 @@ async function installWorkerProcessGate(cdp, sessionId) {
       armed: false,
       held: false,
       payload: undefined,
-      processCount: 0,
-      heldRequestId: null,
       arm() {
         if (this.payload) throw new Error('The E2E Worker process gate is already holding a request.')
         this.armed = true
         this.held = false
-        this.heldRequestId = null
       },
       release() {
         const payload = this.payload
         if (!payload) return false
         this.payload = undefined
         this.held = false
-        this.heldRequestId = null
         this.armed = false
         if (payload.transfer === undefined) {
           originalPostMessage.call(payload.worker, payload.message)
@@ -569,7 +565,6 @@ async function installWorkerProcessGate(cdp, sessionId) {
         if (!payload) return false
         this.payload = undefined
         this.held = false
-        this.heldRequestId = null
         payload.worker.dispatchEvent(new MessageEvent('message', {
           data: {
             message,
@@ -587,8 +582,6 @@ async function installWorkerProcessGate(cdp, sessionId) {
         return {
           armed: this.armed,
           held: this.held,
-          heldRequestId: this.heldRequestId,
-          processCount: this.processCount,
         }
       },
       remove() {
@@ -599,11 +592,9 @@ async function installWorkerProcessGate(cdp, sessionId) {
     }
     const gatedPostMessage = function(message, transfer) {
       if (message && typeof message === 'object' && message.type === 'process') {
-        gate.processCount += 1
         if (gate.armed && !gate.payload) {
           gate.armed = false
           gate.held = true
-          gate.heldRequestId = typeof message.requestId === 'number' ? message.requestId : null
           gate.payload = { message, transfer, worker: this }
           return undefined
         }
@@ -631,7 +622,6 @@ async function installDecodeGate(cdp, sessionId) {
     }
     const gate = {
       armed: false,
-      callCount: 0,
       held: false,
       payload: undefined,
       arm() {
@@ -658,7 +648,7 @@ async function installDecodeGate(cdp, sessionId) {
         return Boolean(this.payload)
       },
       snapshot() {
-        return { armed: this.armed, callCount: this.callCount, held: this.held }
+        return { armed: this.armed, held: this.held }
       },
       remove() {
         window.createImageBitmap = originalCreateImageBitmap
@@ -666,7 +656,6 @@ async function installDecodeGate(cdp, sessionId) {
       },
     }
     window.createImageBitmap = function(...args) {
-      gate.callCount += 1
       if (gate.armed && !gate.payload) {
         gate.armed = false
         gate.held = true
@@ -1248,7 +1237,7 @@ async function openDetails(cdp, sessionId, selector) {
     if (!(details instanceof HTMLDetailsElement)) throw new Error('Details element not found: ' + ${quotedSelector})
     const summary = details.querySelector(':scope > summary')
     if (!(summary instanceof HTMLElement)) throw new Error('Details summary not found: ' + ${quotedSelector})
-    summary.click()
+    if (!details.open) summary.click()
     return details.open
   })()`)
   assert(opened === true, `Could not open details disclosure: ${selector}`)
@@ -1517,17 +1506,6 @@ async function setControlValue(cdp, sessionId, selector, value) {
     element.dispatchEvent(new Event('change', { bubbles: true }))
     return element.value
   })()`)
-}
-
-async function ensureDetailsOpen(cdp, sessionId, selector) {
-  const quotedSelector = JSON.stringify(selector)
-  const opened = await evaluate(cdp, sessionId, `(() => {
-    const details = document.querySelector(${quotedSelector})
-    if (!(details instanceof HTMLDetailsElement)) throw new Error('Details element not found: ' + ${quotedSelector})
-    if (!details.open) details.querySelector(':scope > summary')?.click()
-    return details.open
-  })()`)
-  assert(opened === true, `Could not open details disclosure: ${selector}`)
 }
 
 async function restoreReadySource(cdp, sessionId, filePath, description, expectedSourceDimensions) {
@@ -2572,35 +2550,30 @@ async function runAccessibilityOcclusionRegression({ cdp, fixturePath, sessionId
       await waitForDom(cdp, sessionId, "document.querySelector('.stage-preview-label')?.textContent?.trim() === '圧縮後'", 'the compressed image after AX inspection', PR8_ASSERTION_TIMEOUT_MS).catch(() => {})
     }
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'AX ownership cleanup', '16 × 32 px').catch(() => {})
   }
 }
 
 async function runNoopOutputInvalidationRegression({ cdp, fixturePath, selector, sessionId, valueKey, label }) {
   const restored = await restoreReadySource(cdp, sessionId, fixturePath, `${label} baseline`, '16 × 32 px')
-  try {
-    const before = restored.ready
-    const value = valueKey === 'quality' ? before.quality : before.outputMime
-    assert(valueKey === 'quality' ? Number.isFinite(value) : value.length > 0, `${label} has no current control value: ${JSON.stringify(before)}`)
-    await setControlValue(cdp, sessionId, selector, value)
-    const after = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      if (
-        state.sourceUrl === before.sourceUrl &&
-        state.previewUrl === before.previewUrl &&
-        state.status === 'プレビュー準備完了' &&
-        state.busy === false &&
-        state.pending === false &&
-        state.downloadDisabled === false
-      ) {
-        return state
-      }
-      throw new Error(`${label} invalidated a result despite an unchanged value: ${JSON.stringify({ before, after: state })}`)
-    }, `${label} to preserve the completed result`, PR8_ASSERTION_TIMEOUT_MS)
-    return { after, before, value }
-  } finally {
-    await restoreReadySource(cdp, sessionId, fixturePath, `${label} cleanup`, '16 × 32 px')
-  }
+  const before = restored.ready
+  const value = valueKey === 'quality' ? before.quality : before.outputMime
+  assert(valueKey === 'quality' ? Number.isFinite(value) : value.length > 0, `${label} has no current control value: ${JSON.stringify(before)}`)
+  await setControlValue(cdp, sessionId, selector, value)
+  const after = await waitFor(async () => {
+    const state = await readPr8State(cdp, sessionId)
+    if (
+      state.sourceUrl === before.sourceUrl &&
+      state.previewUrl === before.previewUrl &&
+      state.status === 'プレビュー準備完了' &&
+      state.busy === false &&
+      state.pending === false &&
+      state.downloadDisabled === false
+    ) {
+      return state
+    }
+    throw new Error(`${label} invalidated a result despite an unchanged value: ${JSON.stringify({ before, after: state })}`)
+  }, `${label} to preserve the completed result`, PR8_ASSERTION_TIMEOUT_MS)
+  return { after, before, value }
 }
 
 async function runCancelledExportSelectionRegression({ candidateFixturePath, cdp, downloadDirectory, expectedSourceDimensions, fixturePath, sessionId }) {
@@ -2664,7 +2637,6 @@ async function runCancelledExportSelectionRegression({ candidateFixturePath, cdp
     return outcome
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'cancelled export cleanup', '16 × 32 px')
   }
 }
 
@@ -2726,7 +2698,6 @@ async function runCancelledExportEditRegression({ cdp, downloadDirectory, fixtur
     return { afterRelease, baseline, heldExport, readyBeforeRelease }
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'cancelled export edit cleanup', '16 × 32 px')
   }
 }
 
@@ -2769,7 +2740,6 @@ async function runLatestCandidateOrderingRegression({ cdp, cropDragFixturePath, 
     return { afterObsolete, baseline, firstHeld, latest }
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.held ? window.__e2eDecodeGate.release() : false').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'latest candidate cleanup', '16 × 32 px')
   }
 }
 
@@ -2844,7 +2814,6 @@ async function runComparisonCommitRegression({ cdp, cropDragFixturePath, fixture
       }, sessionId).catch(() => {})
     }
     await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.held ? window.__e2eDecodeGate.release() : false').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'comparison commit cleanup', '16 × 32 px')
   }
 }
 
@@ -2876,7 +2845,6 @@ async function runFailedEncodeSettlementRegression({ cdp, fixturePath, sessionId
     return { baseline, failed, held }
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'injected encode failure cleanup', '16 × 32 px')
   }
 }
 
@@ -2893,7 +2861,7 @@ async function runPendingInvalidReplacementRegression({ cdp, fixturePath, invali
       await setFileInput(cdp, sessionId, pendingFixturePath)
       await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(baseline.sourceUrl)} && document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '1000 × 600 px'`, `${invalidLabel} pending source commit`)
     } else {
-      await ensureDetailsOpen(cdp, sessionId, '.advanced-controls')
+      await openDetails(cdp, sessionId, '.advanced-controls')
       await setControlValue(cdp, sessionId, '#resize-width', '8')
       await waitForDom(cdp, sessionId, `document.querySelector('.effective-size strong')?.textContent?.trim() === '8 × 16 px'`, `${invalidLabel} edited output dimensions`)
     }
@@ -2968,7 +2936,6 @@ async function runPendingInvalidReplacementRegression({ cdp, fixturePath, invali
     return { baseline, failure, pending: pendingState, recovered }
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, `${phase} ${invalidLabel} cleanup`, '16 × 32 px')
   }
 }
 
@@ -3030,7 +2997,6 @@ async function runPreDebounceInvalidReplacementRegression({ cdp, fixturePath, in
     return { baseline, failure, pending: pendingState, recovered }
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2ePreviewDebounceGate.disarm()').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, `before-debounce ${invalidLabel} cleanup`, '16 × 32 px')
   }
 }
 
@@ -3087,14 +3053,13 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
     await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.held ? window.__e2eDecodeGate.release() : false').catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'decode/edit/reset cleanup', '16 × 32 px')
   }
 }
 
 async function runTinyCropOverlayRegression({ cdp, cropDragFixturePath, fixturePath, sessionId }) {
   await restoreReadySource(cdp, sessionId, cropDragFixturePath, 'tiny crop source', '1000 × 600 px')
   try {
-    await ensureDetailsOpen(cdp, sessionId, '.advanced-controls')
+    await openDetails(cdp, sessionId, '.advanced-controls')
     await setControlValue(cdp, sessionId, '#aspect-ratio', 'free')
     const cropInputSelectors = [1, 2, 3, 4].map((index) => `.crop-coordinates label:nth-child(${index}) input`)
     const readLayout = () => evaluate(cdp, sessionId, `(() => {
