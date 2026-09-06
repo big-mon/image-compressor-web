@@ -32,6 +32,11 @@ const EXPECTED_FOOTER_COPYRIGHT = '© 2026 image-compressor-web'
 const SCREENSHOT_DIRECTORY = process.env.E2E_SCREENSHOT_DIR ? resolve(process.env.E2E_SCREENSHOT_DIR) : undefined
 const DESKTOP_VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }
 const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }
+const TABLET_SAVE_LAYOUT_VIEWPORTS = [
+  ['tablet-800', { width: 800, height: 1000, deviceScaleFactor: 1, mobile: false }],
+  ['tablet-breakpoint-low', { width: 609, height: 1000, deviceScaleFactor: 1, mobile: false }],
+  ['tablet-breakpoint-high', { width: 1024, height: 1000, deviceScaleFactor: 1, mobile: false }],
+]
 const CROP_SURFACE_SIZING_CASES = [
   { key: 'landscape-16-9', filename: 'e2e-landscape-16-9.png', width: 160, height: 90 },
   { key: 'portrait-1-2', filename: 'e2e-portrait-1-2.png', width: 160, height: 320 },
@@ -661,6 +666,41 @@ async function captureToolLayout(cdp, sessionId) {
   })()`)
 }
 
+async function captureSaveLayout(cdp, sessionId) {
+  return evaluate(cdp, sessionId, `(() => {
+    const describe = (selector) => {
+      const element = document.querySelector(selector)
+      if (!element) return null
+      const rect = element.getBoundingClientRect()
+      return {
+        bottom: rect.bottom,
+        height: rect.height,
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        width: rect.width,
+      }
+    }
+    const settings = document.querySelector('.settings-column')
+    const settingsStyle = settings ? getComputedStyle(settings) : null
+    return {
+      comparison: describe('.comparison-section'),
+      documentClientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      download: describe('.download-button'),
+      hint: describe('.download-hint'),
+      metrics: describe('.metrics-card'),
+      outputCard: describe('.output-card'),
+      settings: describe('.settings-column'),
+      settingsDisplay: settingsStyle?.display,
+      settingsGridTemplateColumns: settingsStyle?.gridTemplateColumns,
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+    }
+  })()`)
+}
+
 function assertVisibleRect(rect, description) {
   assert(rect?.visible && rect.width > 0 && rect.height > 0, `${description} is not visible: ${JSON.stringify(rect)}`)
 }
@@ -668,6 +708,58 @@ function assertVisibleRect(rect, description) {
 function assertInsideViewport(rect, viewport, description) {
   assertVisibleRect(rect, description)
   assert(rect.top >= -1 && rect.bottom <= viewport.height + 1, `${description} is outside the initial viewport: ${JSON.stringify({ rect, viewport })}`)
+}
+
+function assertRectsDoNotOverlap(first, second, description) {
+  const overlaps = first.left < second.right - 1 &&
+    first.right > second.left + 1 &&
+    first.top < second.bottom - 1 &&
+    first.bottom > second.top + 1
+  assert(!overlaps, `${description} overlap: ${JSON.stringify({ first, second })}`)
+}
+
+async function runTabletSaveLayoutRegression({ cdp, sessionId }) {
+  const results = {}
+  for (const [key, viewport] of TABLET_SAVE_LAYOUT_VIEWPORTS) {
+    await setViewport(cdp, sessionId, viewport)
+    await waitForDom(cdp, sessionId, `window.innerWidth === ${viewport.width} && window.innerHeight === ${viewport.height}`, `the ${key} save layout viewport`)
+    await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
+    const layout = await captureSaveLayout(cdp, sessionId)
+    assert(layout.settingsDisplay === 'grid', `${key} settings did not use the tablet grid: ${JSON.stringify(layout)}`)
+    assert(layout.viewportWidth === viewport.width && layout.viewportHeight === viewport.height, `Unexpected ${key} viewport: ${JSON.stringify(layout)}`)
+    assert(layout.documentScrollWidth <= layout.documentClientWidth + 1 && layout.bodyScrollWidth <= layout.documentClientWidth + 1, `${key} layout overflows horizontally: ${JSON.stringify(layout)}`)
+    assert(layout.download.height >= 40 && layout.download.height <= 56, `${key} download button is not a normal-height control: ${JSON.stringify(layout)}`)
+    assert(layout.download.top >= layout.outputCard.bottom - 1, `${key} download button overlaps the output card: ${JSON.stringify(layout)}`)
+    assert(layout.hint.top >= layout.outputCard.bottom - 1, `${key} save hint overlaps the output card: ${JSON.stringify(layout)}`)
+    assert(layout.metrics.top >= layout.settings.top - 1, `${key} metrics card escaped the settings flow: ${JSON.stringify(layout)}`)
+    assertRectsDoNotOverlap(layout.outputCard, layout.metrics, `${key} output card and metrics card`)
+    assertRectsDoNotOverlap(layout.outputCard, layout.download, `${key} output card and download button`)
+    assertRectsDoNotOverlap(layout.metrics, layout.hint, `${key} metrics card and save hint`)
+    const downloadCenter = (layout.download.top + layout.download.bottom) / 2
+    const hintCenter = (layout.hint.top + layout.hint.bottom) / 2
+    assert(Math.abs(downloadCenter - hintCenter) <= 2, `${key} download button and hint are not a coherent save row: ${JSON.stringify({ download: layout.download, hint: layout.hint })}`)
+
+    const scrolledButton = await evaluate(cdp, sessionId, `(() => {
+      const button = document.querySelector('.download-button')
+      if (!(button instanceof HTMLElement)) return null
+      button.scrollIntoView({ block: 'center', inline: 'nearest' })
+      const rect = button.getBoundingClientRect()
+      return {
+        bottom: rect.bottom,
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        viewportHeight: window.innerHeight,
+        viewportWidth: window.innerWidth,
+      }
+    })()`)
+    assert(scrolledButton && scrolledButton.top >= 0 && scrolledButton.bottom <= scrolledButton.viewportHeight && scrolledButton.left >= 0 && scrolledButton.right <= scrolledButton.viewportWidth, `${key} download button was not usable after scrolling it into view: ${JSON.stringify(scrolledButton)}`)
+    results[key] = { layout, scrolledButton }
+  }
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after tablet save layout checks')
+  await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
+  return results
 }
 
 function assertComparisonImagesFit(layout, mode) {
@@ -1796,6 +1888,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the replacement Worker preview')
   await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
   await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after mobile layout checks')
+  const tabletSaveLayoutRegression = await runTabletSaveLayoutRegression({ cdp, sessionId })
   const aspectAndGuideRegression = await runAspectAndGuideRegression({ cdp, sessionId })
   if (aspectAndGuideRegression.screenshot) {
     screenshots.compositionGuide = aspectAndGuideRegression.screenshot
@@ -1948,6 +2041,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   return {
     browserTarget: targetInfo ? { targetId: targetInfo.targetId, type: targetInfo.type, url: targetInfo.url } : undefined,
     aspectAndGuideRegression,
+    tabletSaveLayoutRegression,
     dimensions: outputDimensions,
     downloadedBytes: outputBytes.length,
     downloadedFilename: basename(downloadedPath),

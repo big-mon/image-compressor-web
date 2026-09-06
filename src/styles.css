@@ -931,6 +931,18 @@ input[type="range"] {
     gap: 0.8rem 1rem;
   }
 
+  .output-card {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .metrics-card {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    margin-top: 0;
+  }
+
   .compact-heading,
   .comparison-section {
     grid-column: 1 / -1;
@@ -941,10 +953,15 @@ input[type="range"] {
   }
 
   .download-button {
+    grid-column: 1;
+    grid-row: 3;
+    align-self: start;
     margin-top: 0;
   }
 
   .download-hint {
+    grid-column: 2;
+    grid-row: 3;
     align-self: center;
     margin: 0;
   }
