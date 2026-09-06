@@ -595,19 +595,31 @@ async function captureToolLayout(cdp, sessionId) {
       top: rect.top,
       width: rect.width,
     })
-    const describeComparisonImage = (media) => {
-      const image = media.querySelector('img')
+    const describeProcessedPreview = (image) => {
       if (!(image instanceof HTMLImageElement)) return null
-      const mediaRect = media.getBoundingClientRect()
       const imageRect = image.getBoundingClientRect()
+      const style = getComputedStyle(image)
       return {
         image: {
           ...describeBox(imageRect),
-          visible: imageRect.width > 0 && imageRect.height > 0,
+          visible: imageRect.width > 0 && imageRect.height > 0 && style.visibility !== 'hidden',
         },
-        media: describeBox(mediaRect),
-        objectFit: getComputedStyle(image).objectFit,
+        backgroundColor: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
+        minHeight: style.minHeight,
+        minWidth: style.minWidth,
+        naturalHeight: image.naturalHeight,
+        naturalWidth: image.naturalWidth,
+        objectFit: style.objectFit,
+        visibility: style.visibility,
       }
+    }
+    const readDimensions = (selector) => {
+      const text = document.querySelector(selector)?.textContent?.trim() ?? ''
+      const values = text.replace(' px', '').split(' × ').map(Number)
+      return values.length === 2 && values.every((value) => Number.isFinite(value))
+        ? { width: values[0], height: values[1] }
+        : null
     }
     const dropZone = document.querySelector('.drop-zone')
     const advancedControls = document.querySelector('.advanced-controls')
@@ -617,14 +629,7 @@ async function captureToolLayout(cdp, sessionId) {
         ...describe('.advanced-controls'),
         open: advancedControls.open,
       } : null,
-      afterCard: describe('.after-card'),
       changeImage: describe('.change-image-button'),
-      comparisonCardCount: document.querySelectorAll('.comparison-card').length,
-      comparisonImages: [...document.querySelectorAll('.comparison-media')].map(describeComparisonImage),
-      comparisonInSettings: document.querySelector('.comparison-section')?.closest('.settings-column') !== null,
-      comparisonMedia: describe('.comparison-media'),
-      comparisonNote: describe('.comparison-note'),
-      comparisonSection: describe('.comparison-section'),
       aspectRatio: describe('#aspect-ratio'),
       compositionGuide: describe('#composition-guide'),
       cropSurface: describe('.crop-surface'),
@@ -644,12 +649,23 @@ async function captureToolLayout(cdp, sessionId) {
       h1Count: document.querySelectorAll('h1').length,
       mobileWidth: window.innerWidth,
       noHorizontalOverflow: document.documentElement.scrollWidth <= window.innerWidth + 1 && document.body.scrollWidth <= window.innerWidth + 1,
-      originalPreviewCardCount: document.querySelectorAll('.comparison-card:not(.after-card)').length,
+      cropRectangle: describe('.crop-rectangle'),
+      legacyPreviewPanelCount: document.querySelectorAll('.comparison-section, .comparison-card, .comparison-media, .after-card').length,
       outputFormat: describe('#output-format'),
       privacyCardPresent: document.querySelector('.privacy-card') !== null,
       privacyCopy: document.querySelector('.privacy-details-body')?.textContent?.trim() ?? '',
       quality: describe('#quality'),
       reassurance: describe('.tool-reassurance'),
+      comparisonHold: {
+        ...describe('.comparison-hold-button'),
+        disabled: document.querySelector('.comparison-hold-button')?.hasAttribute('disabled') ?? false,
+        text: document.querySelector('.comparison-hold-button')?.textContent?.trim() ?? '',
+      },
+      previewLabel: describe('.stage-preview-label'),
+      previewLabelText: document.querySelector('.stage-preview-label')?.textContent?.trim() ?? '',
+      processedPreview: describeProcessedPreview(document.querySelector('.processed-preview')),
+      processedPreviewCount: document.querySelectorAll('.processed-preview').length,
+      renderedSize: readDimensions('.metrics-card .metric-line:nth-child(3) strong'),
       settings: describe('.settings-column'),
       sourceImageCount: document.querySelectorAll('.stage-image').length,
       sourceMetrics: describe('.metrics-card .metric-line:first-child strong'),
@@ -684,7 +700,6 @@ async function captureSaveLayout(cdp, sessionId) {
     const settings = document.querySelector('.settings-column')
     const settingsStyle = settings ? getComputedStyle(settings) : null
     return {
-      comparison: describe('.comparison-section'),
       documentClientWidth: document.documentElement.clientWidth,
       documentScrollWidth: document.documentElement.scrollWidth,
       download: describe('.download-button'),
@@ -762,19 +777,16 @@ async function runTabletSaveLayoutRegression({ cdp, sessionId }) {
   return results
 }
 
-function assertComparisonImagesFit(layout, mode) {
-  assert(layout.comparisonImages.length === 1 && layout.comparisonImages.every(Boolean), `Expected one converted preview image on ${mode}: ${JSON.stringify(layout.comparisonImages)}`)
-  const comparisonImage = layout.comparisonImages[0]
-  const description = `${mode} converted preview image`
-  assert(comparisonImage.objectFit === 'contain', `${description} does not use object-fit: contain: ${JSON.stringify(comparisonImage)}`)
-  assertVisibleRect(comparisonImage.image, description)
-  assert(
-    comparisonImage.image.left >= comparisonImage.media.left - 1 &&
-      comparisonImage.image.right <= comparisonImage.media.right + 1 &&
-      comparisonImage.image.top >= comparisonImage.media.top - 1 &&
-      comparisonImage.image.bottom <= comparisonImage.media.bottom + 1,
-    `${description} is not contained by its comparison media: ${JSON.stringify(comparisonImage)}`,
-  )
+function assertProcessedPreviewAligned(layout, mode) {
+  const preview = layout.processedPreview
+  const description = `${mode} processed preview image`
+  assert(layout.processedPreviewCount === 1 && preview, `Expected one in-stage processed preview on ${mode}: ${JSON.stringify(layout)}`)
+  assertVisibleRect(preview.image, description)
+  assert(preview.objectFit === 'fill', `${description} does not fill its crop bounds: ${JSON.stringify(preview)}`)
+  assert(preview.minWidth === '0px' && preview.minHeight === '0px', `${description} uses crop-rectangle minimum bounds: ${JSON.stringify(preview)}`)
+  assert(preview.naturalWidth === layout.renderedSize?.width && preview.naturalHeight === layout.renderedSize?.height, `${description} natural dimensions do not match the rendered metrics: ${JSON.stringify({ preview, renderedSize: layout.renderedSize })}`)
+  assert(layout.cropRectangle && Math.abs(preview.image.left - layout.cropRectangle.left) <= 1 && Math.abs(preview.image.right - layout.cropRectangle.right) <= 1 && Math.abs(preview.image.top - layout.cropRectangle.top) <= 1 && Math.abs(preview.image.bottom - layout.cropRectangle.bottom) <= 1, `${description} is not mapped to the crop rectangle: ${JSON.stringify({ crop: layout.cropRectangle, preview: preview.image })}`)
+  assert(preview.backgroundColor !== 'rgba(0, 0, 0, 0)' && preview.backgroundImage !== 'none', `${description} has no opaque checker/base behind transparent pixels: ${JSON.stringify(preview)}`)
 }
 
 async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
@@ -811,7 +823,7 @@ async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
   assertVisibleRect(layout.changeImage, `${mode} change-image affordance`)
   assert(layout.editorHeaderPresent === false, `The legacy editor heading remains on ${mode}: ${JSON.stringify(layout)}`)
   assert(layout.sourceImageCount === 1, `The original image is not represented by exactly one stage image on ${mode}: ${JSON.stringify(layout)}`)
-  assert(layout.originalPreviewCardCount === 0, `The duplicate original preview remains on ${mode}: ${JSON.stringify(layout)}`)
+  assert(layout.legacyPreviewPanelCount === 0, `The retired duplicate preview panel remains on ${mode}: ${JSON.stringify(layout)}`)
   assertVisibleRect(layout.cropSurface, `${mode} crop surface`)
   assertVisibleRect(layout.stageArea, `${mode} stage area`)
   assert(layout.reassurance?.text === EXPECTED_REASSURANCE, `The loaded ${mode} privacy reassurance changed unexpectedly: ${JSON.stringify(layout.reassurance)}`)
@@ -824,16 +836,11 @@ async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
   assertVisibleRect(layout.compositionGuide, `${mode} composition guide control`)
   assert(layout.editorActions.top >= layout.stageArea.bottom - 1 && layout.editorActions.top - layout.stageArea.bottom < 24, `${mode} crop action row is not immediately after the stage area: ${JSON.stringify({ stageArea: layout.stageArea, cropSurface: layout.cropSurface, editorActions: layout.editorActions })}`)
   assertVisibleRect(layout.aspectRatio, `${mode} aspect ratio control`)
-  assertVisibleRect(layout.comparisonSection, `${mode} comparison section`)
-  assert(layout.comparisonInSettings, `The converted preview is not retained in the settings sidebar on ${mode}.`)
-  assert(layout.comparisonCardCount === 1, `Expected one compact converted preview card on ${mode}: ${JSON.stringify(layout)}`)
-  assert(layout.comparisonNote?.text === 'プレビュー', `The comparison note still exposes implementation jargon on ${mode}: ${JSON.stringify(layout.comparisonNote)}`)
-  assertVisibleRect(layout.comparisonMedia, `${mode} comparison media`)
-  assert(layout.comparisonMedia.height <= (mode === 'mobile' ? 148 : 184), `${mode} comparison media is not compact: ${JSON.stringify(layout.comparisonMedia)}`)
-  assertComparisonImagesFit(layout, mode)
-  assertVisibleRect(layout.afterCard, `${mode} transformed preview card`)
-  assert(layout.afterCard.top >= layout.comparisonSection.top, `The transformed preview card is outside the comparison section on ${mode}: ${JSON.stringify({ comparisonSection: layout.comparisonSection, afterCard: layout.afterCard })}`)
-  assert(layout.advancedControls && layout.advancedControls.open === false && layout.advancedControls.top > layout.comparisonSection.bottom, `Advanced controls are not deferred below the preview on ${mode}: ${JSON.stringify(layout.advancedControls)}`)
+  assertVisibleRect(layout.comparisonHold, `${mode} original comparison hold control`)
+  assert(layout.comparisonHold.text === '押して元画像を表示' && layout.comparisonHold.disabled === false, `${mode} original comparison hold control is not available: ${JSON.stringify(layout.comparisonHold)}`)
+  assert(layout.previewLabelText === '圧縮後', `${mode} processed preview label is not visible: ${JSON.stringify(layout.previewLabel)}`)
+  assertProcessedPreviewAligned(layout, mode)
+  assert(layout.advancedControls && layout.advancedControls.open === false && layout.advancedControls.top > layout.editorActions.bottom, `Advanced controls are not deferred below the image editor on ${mode}: ${JSON.stringify(layout.advancedControls)}`)
   assert(layout.noHorizontalOverflow, `Loaded ${mode} layout overflows horizontally: ${JSON.stringify(layout)}`)
 
   if (mode === 'desktop') {
@@ -851,7 +858,6 @@ async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
     assertVisibleRect(layout.outputFormat, 'mobile output format')
     assertVisibleRect(layout.quality, 'mobile quality')
     assertVisibleRect(layout.download, 'mobile download')
-    assert(layout.comparisonSection.top >= layout.settings.top, `Mobile converted preview is outside the output settings flow: ${JSON.stringify({ comparisonSection: layout.comparisonSection, settings: layout.settings })}`)
     assert(layout.outputFormat.top < layout.advancedControls.top && layout.download.bottom < layout.advancedControls.top, `Mobile essential output/save controls do not precede advanced controls: ${JSON.stringify(layout)}`)
   }
   return layout
@@ -1203,12 +1209,12 @@ async function runAspectAndGuideRegression({ cdp, sessionId }) {
     const cropValues = [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value))
     return {
       aspect: document.querySelector('#aspect-ratio')?.value ?? '',
-      after: readDimensions('.after-card figcaption span:last-child'),
       crop: cropValues.length === 4 && cropValues.every((value) => Number.isFinite(value))
         ? { x: cropValues[0], y: cropValues[1], width: cropValues[2], height: cropValues[3] }
         : null,
       output: readDimensions('.effective-size strong'),
-      previewUrl: document.querySelector('.after-card img')?.src ?? '',
+      previewUrl: document.querySelector('.processed-preview')?.src ?? '',
+      rendered: readDimensions('.metrics-card .metric-line:nth-child(3) strong'),
       status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
     }
   })()`)
@@ -1228,10 +1234,10 @@ async function runAspectAndGuideRegression({ cdp, sessionId }) {
         next.status === 'プレビュー準備完了' &&
         next.crop &&
         next.output &&
-        next.after &&
+        next.rendered &&
         next.previewUrl.startsWith('blob:') &&
-        next.output.width === next.after.width &&
-        next.output.height === next.after.height
+        next.output.width === next.rendered.width &&
+        next.output.height === next.rendered.height
       ) {
         return next
       }
@@ -1268,7 +1274,7 @@ async function runAspectAndGuideRegression({ cdp, sessionId }) {
         guideRect.top >= cropRect.top - 1 &&
         guideRect.bottom <= cropRect.bottom + 1),
       pointerEvents: style?.pointerEvents ?? null,
-      previewUrl: document.querySelector('.after-card img')?.src ?? '',
+      previewUrl: document.querySelector('.processed-preview')?.src ?? '',
       status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
       value: document.querySelector('#composition-guide')?.value ?? '',
       visible: Boolean(guideRect && guideRect.width > 0 && guideRect.height > 0 && style?.display !== 'none' && style?.visibility !== 'hidden'),
@@ -1313,7 +1319,7 @@ async function runAspectAndGuideRegression({ cdp, sessionId }) {
   assert(guideAfterPixels.stageTransform === guideBaselinePixels.stageTransform, 'Composition guides changed the image transform.')
 
   await setControlValue(cdp, sessionId, '#composition-guide', 'thirds')
-  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.after-card img')?.src === ${JSON.stringify(guidePreviewUrl)}`, 'the default thirds guide after regression')
+  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.processed-preview')?.src === ${JSON.stringify(guidePreviewUrl)}`, 'the default thirds guide after regression')
 
   return {
     aspectCases: aspectResults,
@@ -1388,13 +1394,13 @@ async function dragCropRectangle(cdp, sessionId, direction) {
 }
 
 async function setPanAndAssertCrop(cdp, sessionId, panX, panY, expectedCrop, description) {
-  const previousPreviewUrl = await evaluate(cdp, sessionId, "document.querySelector('.after-card img')?.src ?? ''")
+  const previousPreviewUrl = await evaluate(cdp, sessionId, "document.querySelector('.processed-preview')?.src ?? ''")
   await setControlValue(cdp, sessionId, '#pan-x', panX)
   await setControlValue(cdp, sessionId, '#pan-y', panY)
   const expectedCoordinates = [expectedCrop.x, expectedCrop.y, expectedCrop.width, expectedCrop.height].join(',')
   await waitForDom(cdp, sessionId, `[
     ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === ${JSON.stringify(expectedCoordinates)} && document.querySelector('#pan-x')?.value === ${JSON.stringify(String(panX))} && document.querySelector('#pan-y')?.value === ${JSON.stringify(String(panY))} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.after-card img')?.src !== ${JSON.stringify(previousPreviewUrl)}`, description)
+  ].map((input) => input.value).join(',') === ${JSON.stringify(expectedCoordinates)} && document.querySelector('#pan-x')?.value === ${JSON.stringify(String(panX))} && document.querySelector('#pan-y')?.value === ${JSON.stringify(String(panY))} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.processed-preview')?.src !== ${JSON.stringify(previousPreviewUrl)}`, description)
   const pixels = await capturePixelEvidence(cdp, sessionId)
   const pixelError = assertCropPixelEvidence(`${description} preview`, pixels)
   assert(
@@ -1488,7 +1494,7 @@ async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadD
   await dragCropRectangle(cdp, sessionId, 'right-bottom')
   await waitForDom(cdp, sessionId, `[
     ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.effective-size strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag to the right and bottom bounds')
+  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.effective-size strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag to the right and bottom bounds')
   const rightEdgePixels = await capturePixelEvidence(cdp, sessionId)
   const rightEdgePixelError = assertCropPixelEvidence('right-bottom crop preview', rightEdgePixels)
   assert(rightEdgePixels.crop.x === 600 && rightEdgePixels.crop.y === 300 && rightEdgePixels.crop.width === 400 && rightEdgePixels.crop.height === 300, `Right-bottom crop geometry was not adopted: ${JSON.stringify(rightEdgePixels.crop)}`)
@@ -1505,7 +1511,7 @@ async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadD
   await dragCropRectangle(cdp, sessionId, 'left-top')
   await waitForDom(cdp, sessionId, `[
     ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag back to the left and top bounds')
+  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag back to the left and top bounds')
   const leftEdgePixels = await capturePixelEvidence(cdp, sessionId)
   const leftEdgePixelError = assertCropPixelEvidence('left-top crop preview', leftEdgePixels)
   assert(leftEdgePixels.crop.x === 0 && leftEdgePixels.crop.y === 0 && leftEdgePixels.crop.width === 400 && leftEdgePixels.crop.height === 300, `Left-top crop geometry was not adopted after reversal: ${JSON.stringify(leftEdgePixels.crop)}`)
@@ -1514,7 +1520,7 @@ async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadD
   await dragCropRectangle(cdp, sessionId, 'right-bottom')
   await waitForDom(cdp, sessionId, `[
     ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated crop drag to the right and bottom bounds')
+  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated crop drag to the right and bottom bounds')
   const repeatedRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
   const repeatedRightEdgePixelError = assertCropPixelEvidence('repeated right-bottom crop preview', repeatedRightEdgePixels)
 
@@ -1533,21 +1539,21 @@ async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadD
   await dragCropRectangle(cdp, sessionId, 'right-bottom')
   await waitForDom(cdp, sessionId, `[
     ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('#zoom')?.value === '1' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the zoomed crop drag to the right and bottom bounds')
+  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('#zoom')?.value === '1' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the zoomed crop drag to the right and bottom bounds')
   const zoomRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
   const zoomRightEdgePixelError = assertCropPixelEvidence('zoomed right-bottom crop preview', zoomRightEdgePixels)
 
   await dragCropRectangle(cdp, sessionId, 'left-top')
   await waitForDom(cdp, sessionId, `[
     ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '0,0,200,150' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the reversed zoomed crop drag to the left and top bounds')
+  ].map((input) => input.value).join(',') === '0,0,200,150' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the reversed zoomed crop drag to the left and top bounds')
   const zoomLeftEdgePixels = await capturePixelEvidence(cdp, sessionId)
   const zoomLeftEdgePixelError = assertCropPixelEvidence('zoomed left-top crop preview', zoomLeftEdgePixels)
 
   await dragCropRectangle(cdp, sessionId, 'right-bottom')
   await waitForDom(cdp, sessionId, `[
     ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated zoomed crop drag to the right and bottom bounds')
+  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated zoomed crop drag to the right and bottom bounds')
   const repeatedZoomRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
   const repeatedZoomRightEdgePixelError = assertCropPixelEvidence('repeated zoomed right-bottom crop preview', repeatedZoomRightEdgePixels)
 
@@ -1826,7 +1832,7 @@ async function capturePixelEvidence(cdp, sessionId) {
       return { width, height, pixels: Array.from(context.getImageData(0, 0, width, height).data) }
     }
     const sourceImage = document.querySelector('.stage-image')
-    const previewImage = document.querySelector('.after-card img')
+    const previewImage = document.querySelector('.processed-preview')
     if (!sourceImage?.src || !previewImage?.src) throw new Error('E2E source or Worker preview image is missing.')
     const cropValues = [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value))
     return Promise.all([drawPixels(sourceImage.src), drawPixels(previewImage.src)]).then(([source, preview]) => ({
@@ -1838,7 +1844,268 @@ async function capturePixelEvidence(cdp, sessionId) {
   })()`)
 }
 
-async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation }) {
+async function runComparisonHoldRegression({ cdp, sessionId }) {
+  const readState = () => evaluate(cdp, sessionId, `(() => {
+    const button = document.querySelector('.comparison-hold-button')
+    const processed = document.querySelector('.processed-preview')
+    const label = document.querySelector('.stage-preview-label')
+    const crop = document.querySelector('.crop-rectangle')
+    const processedRect = processed?.getBoundingClientRect()
+    const cropRect = crop?.getBoundingClientRect()
+    const processedStyle = processed ? getComputedStyle(processed) : null
+    return {
+      buttonDisabled: button instanceof HTMLButtonElement ? button.disabled : null,
+      buttonText: button?.textContent?.trim() ?? '',
+      crop: cropRect ? {
+        bottom: cropRect.bottom,
+        left: cropRect.left,
+        right: cropRect.right,
+        top: cropRect.top,
+      } : null,
+      label: label?.textContent?.trim() ?? '',
+      processedCount: document.querySelectorAll('.processed-preview').length,
+      processed: processedRect && processedStyle ? {
+        bottom: processedRect.bottom,
+        left: processedRect.left,
+        naturalHeight: processed instanceof HTMLImageElement ? processed.naturalHeight : 0,
+        naturalWidth: processed instanceof HTMLImageElement ? processed.naturalWidth : 0,
+        right: processedRect.right,
+        top: processedRect.top,
+        visibility: processedStyle.visibility,
+      } : null,
+    }
+  })()`)
+
+  const assertCompressed = async (description) => {
+    const state = await waitFor(() => readState().then((next) => next.label === '圧縮後' && next.processed?.visibility === 'visible' ? next : false), description)
+    assert(state.processedCount === 1 && state.buttonDisabled === false, `${description} did not restore the processed preview: ${JSON.stringify(state)}`)
+    assert(state.crop && state.processed && Math.abs(state.crop.left - state.processed.left) <= 1 && Math.abs(state.crop.right - state.processed.right) <= 1 && Math.abs(state.crop.top - state.processed.top) <= 1 && Math.abs(state.crop.bottom - state.processed.bottom) <= 1, `${description} changed processed/crop alignment: ${JSON.stringify(state)}`)
+    return state
+  }
+
+  const buttonPoint = await evaluate(cdp, sessionId, `(() => {
+    const button = document.querySelector('.comparison-hold-button')
+    if (!(button instanceof HTMLElement)) throw new Error('Comparison hold button is missing.')
+    const rect = button.getBoundingClientRect()
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 }
+  })()`)
+  assert(buttonPoint, 'Comparison hold button has no measurable position.')
+
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: buttonPoint.x,
+    y: buttonPoint.y,
+    button: 'none',
+    buttons: 0,
+  }, sessionId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: buttonPoint.x,
+    y: buttonPoint.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  }, sessionId)
+  await waitForDom(cdp, sessionId, "document.querySelector('.stage-preview-label')?.textContent?.trim() === '元画像' && document.querySelector('.processed-preview') && getComputedStyle(document.querySelector('.processed-preview')).visibility === 'hidden'", 'pointer hold to show the original')
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: 2,
+    y: 2,
+    button: 'left',
+    buttons: 1,
+  }, sessionId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: 2,
+    y: 2,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  }, sessionId)
+  const pointerRelease = await assertCompressed('pointer release outside the hold control')
+
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: buttonPoint.x,
+    y: buttonPoint.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  }, sessionId)
+  await waitForDom(cdp, sessionId, "document.querySelector('.stage-preview-label')?.textContent?.trim() === '元画像'", 'pointer hold before cancel')
+  const cancelState = await evaluate(cdp, sessionId, `(() => {
+    const button = document.querySelector('.comparison-hold-button')
+    if (!(button instanceof HTMLElement)) throw new Error('Comparison hold button is missing for cancel.')
+    return button.dispatchEvent(new PointerEvent('pointercancel', {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+    }))
+  })()`)
+  assert(cancelState === true, `Pointer cancel event was not dispatched: ${cancelState}`)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: buttonPoint.x,
+    y: buttonPoint.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  }, sessionId)
+  const pointerCancel = await assertCompressed('pointer cancel')
+
+  for (const key of [' ', 'Enter']) {
+    await evaluate(cdp, sessionId, `(() => {
+      const button = document.querySelector('.comparison-hold-button')
+      if (!(button instanceof HTMLElement)) throw new Error('Comparison hold button is missing for keyboard hold.')
+      button.focus()
+      button.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: ${JSON.stringify(key)} }))
+    })()`)
+    await waitForDom(cdp, sessionId, "document.querySelector('.stage-preview-label')?.textContent?.trim() === '元画像'", `keyboard ${key === ' ' ? 'Space' : 'Enter'} hold`)
+    await evaluate(cdp, sessionId, `(() => {
+      const button = document.querySelector('.comparison-hold-button')
+      button?.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: ${JSON.stringify(key)} }))
+    })()`)
+    await assertCompressed(`keyboard ${key === ' ' ? 'Space' : 'Enter'} release`)
+  }
+
+  await evaluate(cdp, sessionId, `(() => {
+    const button = document.querySelector('.comparison-hold-button')
+    if (!(button instanceof HTMLElement)) throw new Error('Comparison hold button is missing for blur.')
+    button.focus()
+    button.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: ' ' }))
+    return document.querySelector('.stage-preview-label')?.textContent?.trim()
+  })()`)
+  await waitForDom(cdp, sessionId, "document.querySelector('.stage-preview-label')?.textContent?.trim() === '元画像'", 'keyboard hold before window blur')
+  await evaluate(cdp, sessionId, 'window.dispatchEvent(new Event("blur"))')
+  const windowBlur = await assertCompressed('window blur release')
+
+  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the touch comparison viewport')
+  await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
+  const touchPoint = await evaluate(cdp, sessionId, `(() => {
+    const button = document.querySelector('.comparison-hold-button')
+    if (!(button instanceof HTMLElement)) throw new Error('Comparison hold button is missing for touch.')
+    const rect = button.getBoundingClientRect()
+    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 }
+  })()`)
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ id: 1, x: touchPoint.x, y: touchPoint.y, radiusX: 4, radiusY: 4, force: 1 }],
+  }, sessionId)
+  await waitForDom(cdp, sessionId, "document.querySelector('.stage-preview-label')?.textContent?.trim() === '元画像'", 'touch hold to show the original')
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sessionId)
+  const touchRelease = await assertCompressed('touch release')
+  const contextMenuPrevented = await evaluate(cdp, sessionId, `(() => {
+    const button = document.querySelector('.comparison-hold-button')
+    if (!(button instanceof HTMLElement)) throw new Error('Comparison hold button is missing for context menu.')
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    const dispatched = button.dispatchEvent(event)
+    return { defaultPrevented: event.defaultPrevented, dispatched }
+  })()`)
+  assert(contextMenuPrevented.defaultPrevented && contextMenuPrevented.dispatched === false, `Touch comparison allowed a context menu: ${JSON.stringify(contextMenuPrevented)}`)
+
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
+  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after comparison hold checks')
+  await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
+  return {
+    contextMenuPrevented,
+    keyboard: true,
+    pointerCancel,
+    pointerRelease,
+    touchRelease,
+    windowBlur,
+  }
+}
+
+async function runTransparencyComparisonRegression({ cdp, sessionId, fixturePath }) {
+  const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 8
+    canvas.height = 8
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Could not create a 2D canvas context for the transparency fixture.')
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    context.fillStyle = '#e63946'
+    context.fillRect(0, 0, 4, canvas.height)
+    return canvas.toDataURL('image/png')
+  })()`)
+  const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
+  assert(encodedFixture, 'Transparency fixture did not encode as a PNG data URL.')
+  await writeFile(fixturePath, Buffer.from(encodedFixture, 'base64'))
+  await setControlValue(cdp, sessionId, '#output-format', 'image/png')
+  await waitForDom(cdp, sessionId, `document.querySelector('#output-format')?.value === 'image/png'`, 'the PNG output format for transparency comparison')
+  await setFileInput(cdp, sessionId, fixturePath)
+  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '8 × 8 px'`, 'the transparency fixture source dimensions')
+  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.processed-preview')?.src.startsWith('blob:') === true`, 'the transparent PNG processed preview')
+
+  const evidence = await evaluate(cdp, sessionId, `(async () => {
+    const source = document.querySelector('.stage-image')
+    const preview = document.querySelector('.processed-preview')
+    const crop = document.querySelector('.crop-rectangle')
+    if (!(source instanceof HTMLImageElement) || !(preview instanceof HTMLImageElement) || !(crop instanceof HTMLElement)) {
+      throw new Error('Transparency comparison stage images are missing.')
+    }
+    if (!preview.complete || preview.naturalWidth === 0 || preview.naturalHeight === 0) {
+      await new Promise((resolve, reject) => {
+        const handleLoad = () => {
+          cleanup()
+          resolve()
+        }
+        const handleError = () => {
+          cleanup()
+          reject(new Error('Transparency comparison preview image failed to load.'))
+        }
+        const cleanup = () => {
+          preview.removeEventListener('load', handleLoad)
+          preview.removeEventListener('error', handleError)
+        }
+        preview.addEventListener('load', handleLoad, { once: true })
+        preview.addEventListener('error', handleError, { once: true })
+      })
+    }
+    if (!preview.complete || preview.naturalWidth === 0 || preview.naturalHeight === 0) {
+      throw new Error('Transparency comparison preview image has no natural dimensions.')
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = preview.naturalWidth
+    canvas.height = preview.naturalHeight
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) throw new Error('Transparency comparison canvas context is unavailable.')
+    context.drawImage(preview, 0, 0)
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
+    const previewRect = preview.getBoundingClientRect()
+    const cropRect = crop.getBoundingClientRect()
+    const style = getComputedStyle(preview)
+    const transparentPixelOffset = ((canvas.width - 1) * 4)
+    const opaqueRedPixelOffset = 0
+    return {
+      cropRect: { bottom: cropRect.bottom, left: cropRect.left, right: cropRect.right, top: cropRect.top },
+      hasOpaqueBase: style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundImage !== 'none',
+      natural: { height: preview.naturalHeight, width: preview.naturalWidth },
+      previewRect: { bottom: previewRect.bottom, left: previewRect.left, right: previewRect.right, top: previewRect.top },
+      opaqueRedPixel: {
+        alpha: pixels[opaqueRedPixelOffset + 3],
+        blue: pixels[opaqueRedPixelOffset + 2],
+        green: pixels[opaqueRedPixelOffset + 1],
+        red: pixels[opaqueRedPixelOffset],
+      },
+      transparentPixel: {
+        alpha: pixels[transparentPixelOffset + 3],
+        red: pixels[transparentPixelOffset],
+      },
+      sourceNatural: { height: source.naturalHeight, width: source.naturalWidth },
+    }
+  })()`)
+  assert(evidence.transparentPixel.alpha === 0, `The transparency fixture did not retain a transparent right-half output pixel: ${JSON.stringify(evidence)}`)
+  assert(evidence.opaqueRedPixel.alpha === 255 && evidence.opaqueRedPixel.red === 230 && evidence.opaqueRedPixel.green === 57 && evidence.opaqueRedPixel.blue === 70, `The transparency fixture did not retain its opaque red left-half output pixel: ${JSON.stringify(evidence)}`)
+  assert(evidence.hasOpaqueBase, `The processed preview has no opaque checker/base for transparent pixels: ${JSON.stringify(evidence)}`)
+  assert(evidence.natural.width === 8 && evidence.natural.height === 8, `The transparent preview natural size was unexpected: ${JSON.stringify(evidence)}`)
+  assert(Math.abs(evidence.previewRect.left - evidence.cropRect.left) <= 1 && Math.abs(evidence.previewRect.right - evidence.cropRect.right) <= 1 && Math.abs(evidence.previewRect.top - evidence.cropRect.top) <= 1 && Math.abs(evidence.previewRect.bottom - evidence.cropRect.bottom) <= 1, `The transparent processed preview escaped the crop rectangle: ${JSON.stringify(evidence)}`)
+  return evidence
+}
+
+async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, sourceFamilies, sourceOrientation, transparencyFixturePath }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
   const screenshots = {}
@@ -1949,17 +2216,37 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   assertMappingSeparation('90-degree horizontal-flip order', intermediateError, intermediateWrongError)
 
   await clickButton(cdp, sessionId, '上下反転')
-  await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.style.transform === 'translate(-50%, -50%) scaleX(-1) scaleY(-1) rotate(90deg)' && [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('上下反転'))?.classList.contains('is-selected')`, 'the vertical flip')
+  await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.style.transform === 'translate(-50%, -50%) scaleX(-1) scaleY(-1) rotate(90deg)' && [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('上下反転'))?.classList.contains('is-selected') && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.processed-preview')?.src.startsWith('blob:') === true`, 'the vertical flip')
+  const qualityPreviewBefore = await evaluate(cdp, sessionId, `(() => {
+    const image = document.querySelector('.processed-preview')
+    return image instanceof HTMLImageElement ? { src: image.src } : null
+  })()`)
   await setControlValue(cdp, sessionId, '#quality', '0.57')
   await waitForDom(cdp, sessionId, `document.querySelector('#quality')?.value === '0.57' && document.querySelector('output[for="quality"]')?.textContent?.trim() === '57%'`, 'the JPEG quality change')
+  const qualityPreviewAfter = await waitFor(async () => {
+    const next = await evaluate(cdp, sessionId, `(() => {
+      const image = document.querySelector('.processed-preview')
+      return {
+        bytes: document.querySelector('.metrics-card .metric-line:nth-child(4) strong')?.textContent?.trim() ?? '',
+        src: image instanceof HTMLImageElement ? image.src : '',
+        status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
+      }
+    })()`)
+    if (next.status === 'プレビュー準備完了' && next.src.startsWith('blob:') && next.src !== qualityPreviewBefore?.src) {
+      return next
+    }
+    throw new Error(`Quality preview has not updated: ${JSON.stringify(next)}`)
+  }, 'the rendered preview after the JPEG quality change')
+  assert(qualityPreviewAfter.bytes.length > 0, `The quality change did not produce rendered output metrics: ${JSON.stringify(qualityPreviewAfter)}`)
   await setControlValue(cdp, sessionId, '#resize-width', '16')
   await waitForDom(cdp, sessionId, `document.querySelector('#resize-width')?.value === '16' && document.querySelector('#resize-height')?.value === ''`, 'the width-only resize control')
 
   const previewState = await waitFor(async () => {
     const domState = await evaluate(cdp, sessionId, `(() => ({
-      afterDimensions: document.querySelector('.after-card figcaption span:last-child')?.textContent?.trim(),
-      hasBlobPreview: document.querySelector('.after-card img')?.src.startsWith('blob:') === true,
+      hasBlobPreview: document.querySelector('.processed-preview')?.src.startsWith('blob:') === true,
       outputSize: document.querySelector('.effective-size strong')?.textContent?.trim(),
+      renderedSize: document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim(),
+      processedPreviewCount: document.querySelectorAll('.processed-preview').length,
       status: document.querySelector('.status-chip')?.textContent?.trim(),
     }))()`)
     const targets = await cdp.send('Target.getTargets')
@@ -1984,7 +2271,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
       const pathname = new URL(request.url).pathname
       return serverWorkerAssetRequests.some((serverRequest) => serverRequest.pathname === pathname)
     })
-    if (domState.status === 'プレビュー準備完了' && domState.afterDimensions === '16 × 16 px' && domState.outputSize === '16 × 16 px' && domState.hasBlobPreview && workerTargets.length > 0 && verifiedWorkerAssetRequests.length > 0) {
+    if (domState.status === 'プレビュー準備完了' && domState.renderedSize === '16 × 16 px' && domState.outputSize === '16 × 16 px' && domState.hasBlobPreview && domState.processedPreviewCount === 1 && workerTargets.length > 0 && verifiedWorkerAssetRequests.length > 0) {
       return {
         domState,
         serverWorkerAssetRequests,
@@ -2004,15 +2291,17 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   const finalError = assertJpegPixelEvidence('final rotate-and-double-flip preview', new Uint8ClampedArray(finalPixels.preview.pixels), finalExpected)
   const finalWrongError = summarizePixelError(new Uint8ClampedArray(finalPixels.preview.pixels), finalWrongMapping)
   assertMappingSeparation('final single-axis rotation-order mutation', finalError, finalWrongError)
+  assertProcessedPreviewAligned(await captureToolLayout(cdp, sessionId), 'edited')
+  const comparisonHoldRegression = await runComparisonHoldRegression({ cdp, sessionId })
 
   diagnostics.assertClean()
   await cdp.send('Browser.setDownloadBehavior', {
     behavior: 'allow',
     downloadPath: downloadDirectory,
   })
-  const exportPreviewUrlBeforeGuide = await evaluate(cdp, sessionId, "document.querySelector('.after-card img')?.src ?? ''")
+  const exportPreviewUrlBeforeGuide = await evaluate(cdp, sessionId, "document.querySelector('.processed-preview')?.src ?? ''")
   await setControlValue(cdp, sessionId, '#composition-guide', 'golden')
-  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'golden' && document.querySelector('.after-card img')?.src === ${JSON.stringify(exportPreviewUrlBeforeGuide)} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the unchanged preview before guide-visible export')
+  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'golden' && document.querySelector('.processed-preview')?.src === ${JSON.stringify(exportPreviewUrlBeforeGuide)} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the unchanged preview before guide-visible export')
   await clickButton(cdp, sessionId, 'ダウンロード')
   const downloadedFilename = 'e2e-metadata-fixture-replacement-edited.jpg'
   const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
@@ -2021,9 +2310,9 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   const outputFamilies = detectMetadataFamilies(outputBytes)
   assert(outputDimensions.width === 16 && outputDimensions.height === 16, `Downloaded JPEG dimensions were ${outputDimensions.width}x${outputDimensions.height}, expected 16x16.`)
   assert(Object.values(outputFamilies).every((value) => value === false), `Injected JPEG metadata remained in output: ${JSON.stringify(outputFamilies)}`)
-  const exportPreviewUrlAfterExport = await evaluate(cdp, sessionId, "document.querySelector('.after-card img')?.src ?? ''")
+  const exportPreviewUrlAfterExport = await evaluate(cdp, sessionId, "document.querySelector('.processed-preview')?.src ?? ''")
   await setControlValue(cdp, sessionId, '#composition-guide', 'thirds')
-  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.after-card img')?.src === ${JSON.stringify(exportPreviewUrlAfterExport)}`, 'the default guide after guide-visible export')
+  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.processed-preview')?.src === ${JSON.stringify(exportPreviewUrlAfterExport)}`, 'the default guide after guide-visible export')
 
   const cropDragRegression = await runCropDragBoundsRegression({
     cdp,
@@ -2033,6 +2322,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   })
 
   const cropSurfaceSizing = await runCropSurfaceSizingRegression({ cdp, layoutFixtures, sessionId })
+  const transparencyComparisonRegression = await runTransparencyComparisonRegression({ cdp, fixturePath: transparencyFixturePath, sessionId })
   diagnostics.assertClean()
 
   const observedRequests = network.getObservedRequests()
@@ -2041,6 +2331,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
   return {
     browserTarget: targetInfo ? { targetId: targetInfo.targetId, type: targetInfo.type, url: targetInfo.url } : undefined,
     aspectAndGuideRegression,
+    comparisonHoldRegression,
     tabletSaveLayoutRegression,
     dimensions: outputDimensions,
     downloadedBytes: outputBytes.length,
@@ -2054,6 +2345,7 @@ async function runScenario({ allowedPaths, basePath, cropDragFixturePath, downlo
     network: formatNetworkReport(observedRequests),
     cropSurfaceSizing,
     cropDragRegression,
+    transparencyComparisonRegression,
     preview: {
       ...previewState,
       pixelEvidence: {
@@ -2073,6 +2365,7 @@ async function main() {
   const downloadDirectory = join(temporaryRoot, 'downloads')
   const fixturePath = join(temporaryRoot, 'e2e-metadata-fixture.jpg')
   const cropDragFixturePath = join(temporaryRoot, 'e2e-crop-drag.png')
+  const transparencyFixturePath = join(temporaryRoot, 'e2e-transparent.png')
   const layoutFixtures = CROP_SURFACE_SIZING_CASES.map((fixture) => ({
     ...fixture,
     path: join(temporaryRoot, fixture.filename),
@@ -2129,6 +2422,7 @@ async function main() {
       sessionId: pageSessionId,
       sourceFamilies,
       sourceOrientation,
+      transparencyFixturePath,
       targetId: pageTargetId,
     })
     report.staticContentRegression = await runStaticContentRegression({
