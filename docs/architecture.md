@@ -20,13 +20,13 @@ File/drop
   → App の object URL、metrics、download
 ```
 
-`App` は編集変更後に debounce された reduced-resolution の preview を要求し、download では full output size を要求する。両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
+`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、明示的な保存サイズ確認と download では full output size を要求する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
 
 ## Module contracts and seams
 
 | module | stable interface / ownership |
 | --- | --- |
-| `src/App.tsx` | browser UI、File input/drop、編集 intent、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
+| `src/App.tsx` | browser UI、File input/drop、編集 intent、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
 | `src/image/stage.ts` | `createStageTransform` と crop surface style。CSS 表示文字列だけを組み立て、Canvas のピクセル処理は所有しない。 |
