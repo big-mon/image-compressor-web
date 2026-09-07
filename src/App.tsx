@@ -158,33 +158,12 @@ function App() {
     )
   }, [asset, editState])
 
-  const quickPreviewMetrics = useMemo(() => {
-    if (!asset || !quickPreviewResult) {
-      return undefined
-    }
-    return calculateMetrics(
-      { bytes: asset.file.size },
-      {
-        width: quickPreviewResult.width,
-        height: quickPreviewResult.height,
-        bytes: quickPreviewResult.bytes,
-      },
-    )
-  }, [asset, quickPreviewResult])
-
-  const fullOutputMetrics = useMemo(() => {
-    if (!asset || !fullOutputResult) {
-      return undefined
-    }
-    return calculateMetrics(
-      { bytes: asset.file.size },
-      {
-        width: fullOutputResult.width,
-        height: fullOutputResult.height,
-        bytes: fullOutputResult.bytes,
-      },
-    )
-  }, [asset, fullOutputResult])
+  const quickPreviewMetrics = asset && quickPreviewResult
+    ? calculateMetrics({ bytes: asset.file.size }, quickPreviewResult)
+    : undefined
+  const fullOutputMetrics = asset && fullOutputResult
+    ? calculateMetrics({ bytes: asset.file.size }, fullOutputResult)
+    : undefined
 
   const releaseRenderedUrl = () => {
     if (renderedUrlRef.current) {
@@ -774,15 +753,6 @@ function App() {
         height: `${geometry.displaySize.height / currentCrop.height * 100}%`,
       }
     : undefined
-  const comparisonSourceImageStyle = geometry && asset && editState
-    ? {
-        left: '50%',
-        top: '50%',
-        width: `${asset.pixels.width / geometry.displaySize.width * 100}%`,
-        height: `${asset.pixels.height / geometry.displaySize.height * 100}%`,
-        transform: createStageTransform(editState.rotation, editState.flipHorizontal, editState.flipVertical),
-      }
-    : undefined
 
   return (
     <>
@@ -960,7 +930,7 @@ function App() {
                               src={asset.objectUrl}
                               alt="元画像の切り抜き・変換後フレーム"
                               draggable={false}
-                              style={comparisonSourceImageStyle}
+                              style={stageImageStyle}
                             />
                           </div>
                           <span className="comparison-layer-label">元画像</span>

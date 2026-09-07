@@ -4,7 +4,6 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { inflateSync } from 'node:zlib'
 
 import {
   createMetadataJpegFixture,
@@ -837,94 +836,29 @@ async function captureScreenshot(cdp, sessionId, filename) {
   return screenshotPath
 }
 
-function decodeScreenshotPng(data) {
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-  assert(data.subarray(0, signature.length).equals(signature), 'The screenshot did not have a PNG signature.')
-  let offset = signature.length
-  let width = 0
-  let height = 0
-  let bitDepth = 0
-  let colorType = 0
-  const imageData = []
-  while (offset < data.length) {
-    const length = data.readUInt32BE(offset)
-    const type = data.toString('ascii', offset + 4, offset + 8)
-    const chunk = data.subarray(offset + 8, offset + 8 + length)
-    offset += 12 + length
-    if (type === 'IHDR') {
-      width = chunk.readUInt32BE(0)
-      height = chunk.readUInt32BE(4)
-      bitDepth = chunk[8]
-      colorType = chunk[9]
-    } else if (type === 'IDAT') {
-      imageData.push(chunk)
-    } else if (type === 'IEND') {
-      break
-    }
-  }
-  assert(width > 0 && height > 0 && bitDepth === 8 && (colorType === 2 || colorType === 6), `Unsupported screenshot PNG format: ${JSON.stringify({ bitDepth, colorType, height, width })}`)
-  const channels = colorType === 6 ? 4 : 3
-  const rowBytes = width * channels
-  const inflated = inflateSync(Buffer.concat(imageData))
-  const pixels = Buffer.alloc(width * height * 4)
-  let inputOffset = 0
-  let previousRow = Buffer.alloc(rowBytes)
-  const paeth = (left, above, upperLeft) => {
-    const estimate = left + above - upperLeft
-    const leftDistance = Math.abs(estimate - left)
-    const aboveDistance = Math.abs(estimate - above)
-    const upperLeftDistance = Math.abs(estimate - upperLeft)
-    if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left
-    if (aboveDistance <= upperLeftDistance) return above
-    return upperLeft
-  }
-  for (let y = 0; y < height; y += 1) {
-    const filter = inflated[inputOffset]
-    inputOffset += 1
-    const row = Buffer.from(inflated.subarray(inputOffset, inputOffset + rowBytes))
-    inputOffset += rowBytes
-    for (let index = 0; index < rowBytes; index += 1) {
-      const left = index >= channels ? row[index - channels] : 0
-      const above = previousRow[index]
-      const upperLeft = index >= channels ? previousRow[index - channels] : 0
-      if (filter === 1) row[index] = (row[index] + left) & 0xff
-      else if (filter === 2) row[index] = (row[index] + above) & 0xff
-      else if (filter === 3) row[index] = (row[index] + Math.floor((left + above) / 2)) & 0xff
-      else if (filter === 4) row[index] = (row[index] + paeth(left, above, upperLeft)) & 0xff
-      else assert(filter === 0, `Unsupported screenshot PNG filter: ${filter}`)
-    }
-    for (let x = 0; x < width; x += 1) {
-      const sourceOffset = x * channels
-      const pixelOffset = (y * width + x) * 4
-      pixels[pixelOffset] = row[sourceOffset]
-      pixels[pixelOffset + 1] = row[sourceOffset + 1]
-      pixels[pixelOffset + 2] = row[sourceOffset + 2]
-      pixels[pixelOffset + 3] = channels === 4 ? row[sourceOffset + 3] : 255
-    }
-    previousRow = row
-  }
-  return { height, pixels, width }
-}
-
-async function captureScreenshotPixels(cdp, sessionId) {
+async function captureScreenshotSamples(cdp, sessionId, points) {
   const result = await cdp.send('Page.captureScreenshot', {
     captureBeyondViewport: false,
     format: 'png',
     fromSurface: true,
   }, sessionId)
-  return decodeScreenshotPng(Buffer.from(result.data, 'base64'))
-}
-
-function screenshotPixel(screenshot, x, y) {
-  const pixelX = Math.max(0, Math.min(screenshot.width - 1, Math.round(x)))
-  const pixelY = Math.max(0, Math.min(screenshot.height - 1, Math.round(y)))
-  const offset = (pixelY * screenshot.width + pixelX) * 4
-  return {
-    alpha: screenshot.pixels[offset + 3],
-    blue: screenshot.pixels[offset + 2],
-    green: screenshot.pixels[offset + 1],
-    red: screenshot.pixels[offset],
-  }
+  return evaluate(cdp, sessionId, `(async () => {
+    const image = new Image()
+    image.src = ${JSON.stringify(`data:image/png;base64,${result.data}`)}
+    await image.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = image.naturalWidth
+    canvas.height = image.naturalHeight
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) throw new Error('Could not create a screenshot sampling context.')
+    context.drawImage(image, 0, 0)
+    return ${JSON.stringify(points)}.map(([x, y]) => {
+      const pixelX = Math.max(0, Math.min(canvas.width - 1, Math.round(x)))
+      const pixelY = Math.max(0, Math.min(canvas.height - 1, Math.round(y)))
+      const [red, green, blue, alpha] = context.getImageData(pixelX, pixelY, 1, 1).data
+      return { alpha, blue, green, red }
+    })
+  })()`)
 }
 
 async function captureToolLayout(cdp, sessionId) {
@@ -3823,12 +3757,10 @@ async function runTransparencyComparisonRegression({ cdp, sessionId, fixturePath
     await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
     const state = await readComparisonState(cdp, sessionId)
     assert(state.viewport?.visible, `${mode} transparency comparison viewport is not visible: ${JSON.stringify(state)}`)
-    const screenshot = await captureScreenshotPixels(cdp, sessionId)
-    const pixels = sampleFractions.map(([x, y]) => screenshotPixel(
-      screenshot,
+    const pixels = await captureScreenshotSamples(cdp, sessionId, sampleFractions.map(([x, y]) => [
       state.viewport.left + state.viewport.width * x,
       state.viewport.top + state.viewport.height * y,
-    ))
+    ]))
     return { mode, pixels, state }
   }
 
