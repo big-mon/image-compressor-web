@@ -186,6 +186,47 @@ export function constrainCrop(crop: CropRect, displaySize: Size, preset: AspectR
   }
 }
 
+/**
+ * Resizes from the bottom-right handle while keeping the top-left anchor
+ * fixed. For a locked ratio, the pointer delta is continuously projected onto
+ * the ratio ray, so horizontal-only and vertical-only drags both resize the
+ * frame without a discontinuity when the pointer changes direction.
+ */
+export function resizeCropFromBottomRight(
+  crop: CropRect,
+  delta: Pick<CropRect, 'x' | 'y'>,
+  displaySize: Size,
+  preset: AspectRatioPreset,
+): CropRect {
+  const availableWidth = Math.max(1, displaySize.width - crop.x)
+  const availableHeight = Math.max(1, displaySize.height - crop.y)
+
+  if (preset === 'free') {
+    return {
+      x: crop.x,
+      y: crop.y,
+      width: clamp(crop.width + delta.x, 1, availableWidth),
+      height: clamp(crop.height + delta.y, 1, availableHeight),
+    }
+  }
+
+  const ratio = getAspectRatio(preset, displaySize)
+  const minimumWidth = Math.min(Math.max(1, ratio), availableWidth, availableHeight * ratio)
+  const maximumWidth = Math.max(minimumWidth, Math.min(availableWidth, availableHeight * ratio))
+  const ratioSquared = ratio * ratio
+  const projectedWidth = crop.width + (
+    (delta.x * ratioSquared + delta.y * ratio) / (ratioSquared + 1)
+  )
+  const width = clamp(projectedWidth, minimumWidth, maximumWidth)
+
+  return {
+    x: crop.x,
+    y: crop.y,
+    width,
+    height: width / ratio,
+  }
+}
+
 /** Translates a final-display crop by a pixel delta and keeps it constrained. */
 export function translateCrop(
   crop: CropRect,

@@ -6,6 +6,7 @@ import {
   calculateImageGeometry,
   constrainCrop,
   createEditState,
+  resizeCropFromBottomRight,
   rotateEditState,
   translateCrop,
   type AspectRatioPreset,
@@ -66,6 +67,8 @@ interface SourceAsset {
 }
 
 type CropInteractionMode = 'move' | 'resize'
+type ComparisonMode = 'original' | 'compare' | 'result'
+type ComparisonInspection = 'fit' | 'actual'
 
 interface CropInteraction {
   readonly pointerId: number
@@ -103,9 +106,14 @@ function App() {
   const [renderedResult, setRenderedResult] = useState<RasterResult | undefined>()
   const [renderedUrl, setRenderedUrl] = useState('')
   const [renderedIsPreview, setRenderedIsPreview] = useState(true)
+  const [quickPreviewResult, setQuickPreviewResult] = useState<RasterResult | undefined>()
+  const [fullOutputResult, setFullOutputResult] = useState<RasterResult | undefined>()
   const [candidatePending, setCandidatePending] = useState(false)
   const [previewPending, setPreviewPending] = useState(false)
-  const [showingOriginal, setShowingOriginal] = useState(false)
+  const [fullOutputPending, setFullOutputPending] = useState(false)
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('compare')
+  const [comparisonSplit, setComparisonSplit] = useState(50)
+  const [comparisonInspection, setComparisonInspection] = useState<ComparisonInspection>('fit')
   const [exportPending, setExportPending] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [fileError, setFileError] = useState('')
@@ -118,13 +126,12 @@ function App() {
   const fileLoadGenerationRef = useRef(0)
   const resultIntentGenerationRef = useRef(0)
   const previewRequestIdRef = useRef(0)
+  const fullOutputRequestIdRef = useRef(0)
   const exportRequestIdRef = useRef(0)
   const exportActiveRef = useRef<{ requestId: number; intentGeneration: number } | undefined>(undefined)
   const currentIntentRef = useRef<ResultIntent | undefined>(undefined)
   const cropSurfaceRef = useRef<HTMLDivElement | null>(null)
   const cropInteractionRef = useRef<CropInteraction | undefined>(undefined)
-  const comparisonButtonRef = useRef<HTMLButtonElement | null>(null)
-  const comparisonPointerIdRef = useRef<number | undefined>(undefined)
 
   currentIntentRef.current = asset && editState
     ? {
@@ -135,21 +142,10 @@ function App() {
       }
     : undefined
 
-  const releaseOriginalComparison = () => {
-    const pointerId = comparisonPointerIdRef.current
-    comparisonPointerIdRef.current = undefined
-    setShowingOriginal(false)
-    if (pointerId !== undefined) {
-      const button = comparisonButtonRef.current
-      if (button?.hasPointerCapture(pointerId)) {
-        button.releasePointerCapture(pointerId)
-      }
-    }
-  }
-
   const invalidateResultIntent = () => {
     resultIntentGenerationRef.current += 1
     previewRequestIdRef.current += 1
+    fullOutputRequestIdRef.current += 1
   }
 
   const geometry = useMemo(() => {
@@ -162,19 +158,12 @@ function App() {
     )
   }, [asset, editState])
 
-  const metrics = useMemo(() => {
-    if (!asset || !renderedResult) {
-      return undefined
-    }
-    return calculateMetrics(
-      { bytes: asset.file.size },
-      {
-        width: renderedResult.width,
-        height: renderedResult.height,
-        bytes: renderedResult.bytes,
-      },
-    )
-  }, [asset, renderedResult])
+  const quickPreviewMetrics = asset && quickPreviewResult
+    ? calculateMetrics({ bytes: asset.file.size }, quickPreviewResult)
+    : undefined
+  const fullOutputMetrics = asset && fullOutputResult
+    ? calculateMetrics({ bytes: asset.file.size }, fullOutputResult)
+    : undefined
 
   const releaseRenderedUrl = () => {
     if (renderedUrlRef.current) {
@@ -184,6 +173,9 @@ function App() {
     setRenderedUrl('')
     setRenderedResult(undefined)
     setRenderedIsPreview(true)
+    setQuickPreviewResult(undefined)
+    setFullOutputResult(undefined)
+    setComparisonInspection('fit')
   }
 
   const cancelExport = () => {
@@ -192,10 +184,15 @@ function App() {
     setExportPending(false)
   }
 
+  const cancelFullOutput = () => {
+    fullOutputRequestIdRef.current += 1
+    setFullOutputPending(false)
+  }
+
   const invalidatePreview = () => {
     invalidateResultIntent()
     cancelExport()
-    releaseOriginalComparison()
+    cancelFullOutput()
     releaseRenderedUrl()
     setPreviewPending(true)
     setFileError('')
@@ -204,7 +201,7 @@ function App() {
 
   const beginFileSelection = () => {
     cancelExport()
-    releaseOriginalComparison()
+    cancelFullOutput()
     setCandidatePending(true)
     setFileError('')
     setProcessingError('')
@@ -297,6 +294,7 @@ function App() {
           ) {
             return
           }
+          setQuickPreviewResult(result)
           adoptRenderedResult(result, true)
           setPreviewPending(false)
         })
@@ -316,6 +314,59 @@ function App() {
 
     return () => window.clearTimeout(timeoutId)
   }, [asset, editState, geometry, outputMime, processorError, processorReady, quality])
+
+  const confirmFullOutput = async () => {
+    if (
+      !asset ||
+      !editState ||
+      !processorRef.current ||
+      candidatePending ||
+      previewPending ||
+      exportPending ||
+      fullOutputPending ||
+      fullOutputResult
+    ) {
+      return
+    }
+    const expectedIntent: ResultIntent = {
+      source: asset,
+      edit: editState,
+      outputMime,
+      quality,
+    }
+    const intentGeneration = resultIntentGenerationRef.current
+    const processor = processorRef.current
+    const requestId = ++fullOutputRequestIdRef.current
+    setFullOutputPending(true)
+    setProcessingError('')
+
+    try {
+      const result = await processor.process(asset.pixels, editState, {
+        mimeType: outputMime,
+        quality,
+        preview: false,
+      })
+      const isCurrent = fullOutputRequestIdRef.current === requestId &&
+        resultIntentGenerationRef.current === intentGeneration &&
+        isSameResultIntent(currentIntentRef.current, expectedIntent)
+      if (!isCurrent) {
+        return
+      }
+      setFullOutputResult(result)
+      adoptRenderedResult(result, false)
+    } catch (error) {
+      const isCurrent = fullOutputRequestIdRef.current === requestId &&
+        resultIntentGenerationRef.current === intentGeneration &&
+        isSameResultIntent(currentIntentRef.current, expectedIntent)
+      if (isCurrent) {
+        setProcessingError(getErrorMessage(error, '保存用画像を確認できませんでした。'))
+      }
+    } finally {
+      if (fullOutputRequestIdRef.current === requestId) {
+        setFullOutputPending(false)
+      }
+    }
+  }
 
   const handleFile = async (file: File | undefined) => {
     if (!file) {
@@ -338,7 +389,6 @@ function App() {
       const objectUrl = URL.createObjectURL(file)
       try {
         invalidateResultIntent()
-        releaseOriginalComparison()
         processorRef.current?.clearSource()
       } catch (error) {
         URL.revokeObjectURL(objectUrl)
@@ -542,12 +592,9 @@ function App() {
     if (interaction.mode === 'resize') {
       updateEditState((current) => ({
         ...current,
-        crop: constrainCrop(
-          {
-            ...interaction.startEffectiveCrop,
-            width: Math.max(1, interaction.startEffectiveCrop.width + deltaX),
-            height: Math.max(1, interaction.startEffectiveCrop.height + deltaY),
-          },
+        crop: resizeCropFromBottomRight(
+          interaction.startEffectiveCrop,
+          { x: deltaX, y: deltaY },
           interaction.displaySize,
           current.aspectRatio,
         ),
@@ -579,30 +626,6 @@ function App() {
         cropSurfaceRef.current.releasePointerCapture(event.pointerId)
       }
     }
-  }
-
-  const beginOriginalComparison = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (!renderedUrl || !renderedResult) {
-      return
-    }
-    event.preventDefault()
-    const button = event.currentTarget
-    comparisonPointerIdRef.current = event.pointerId
-    button.setPointerCapture(event.pointerId)
-    setShowingOriginal(true)
-  }
-
-  const endOriginalComparison = (event?: ReactPointerEvent<HTMLButtonElement>) => {
-    const activePointerId = comparisonPointerIdRef.current
-    if (
-      event &&
-      event.type === 'pointerup' &&
-      activePointerId !== undefined &&
-      event.pointerId !== activePointerId
-    ) {
-      return
-    }
-    releaseOriginalComparison()
   }
 
   const moveCropWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -651,13 +674,14 @@ function App() {
     const output = { mimeType: outputMime, quality, preview: false }
 
     try {
-      const result = await processor.process(asset.pixels, editState, output)
+      const result = fullOutputResult ?? await processor.process(asset.pixels, editState, output)
       const isCurrent = exportActiveRef.current?.requestId === requestId &&
         resultIntentGenerationRef.current === intentGeneration &&
         isSameResultIntent(currentIntentRef.current, expectedIntent)
       if (!isCurrent) {
         return
       }
+      setFullOutputResult(result)
       const downloadUrl = adoptRenderedResult(result, false)
       const anchor = document.createElement('a')
       anchor.href = downloadUrl
@@ -706,28 +730,32 @@ function App() {
     ? createCropSurfaceStyle(geometry.displaySize)
     : undefined
   const comparisonAvailable = Boolean(renderedUrl && renderedResult)
-  const showingOriginalComparison = comparisonAvailable && showingOriginal
-  const pendingMaskVisible = previewPending && !comparisonAvailable
-  const sourceOccluded = comparisonAvailable
-    ? !showingOriginalComparison
-    : pendingMaskVisible
   const errorMessage = fileError || processingError || processorError
-  const busy = candidatePending || previewPending || exportPending
-  const previewModeLabel = showingOriginalComparison
-    ? '元画像'
-    : comparisonAvailable
-      ? '圧縮後'
-      : previewPending
-        ? '更新中'
-        : errorMessage
-          ? 'エラー'
-          : 'プレビューなし'
-
-  useEffect(() => {
-    const handleWindowBlur = () => releaseOriginalComparison()
-    window.addEventListener('blur', handleWindowBlur)
-    return () => window.removeEventListener('blur', handleWindowBlur)
-  }, [])
+  const busy = candidatePending || previewPending || fullOutputPending || exportPending
+  const comparisonFrameStyle: CSSProperties | undefined = geometry
+    ? {
+        aspectRatio: `${geometry.crop.width} / ${geometry.crop.height}`,
+        maxWidth: `min(56rem, calc(38rem * ${geometry.crop.width / geometry.crop.height}))`,
+      }
+    : undefined
+  const actualInspectionAvailable = comparisonAvailable && !renderedIsPreview && fullOutputResult !== undefined && renderedResult !== undefined
+  const comparisonViewportStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual'
+    ? { height: 'min(38rem, 70vh)' }
+    : comparisonFrameStyle
+  const comparisonCanvasStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual' && renderedResult
+    ? {
+        width: `${renderedResult.width}px`,
+        height: `${renderedResult.height}px`,
+      }
+    : undefined
+  const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
+    ? {
+        left: `${-currentCrop.x / currentCrop.width * 100}%`,
+        top: `${-currentCrop.y / currentCrop.height * 100}%`,
+        width: `${geometry.displaySize.width / currentCrop.width * 100}%`,
+        height: `${geometry.displaySize.height / currentCrop.height * 100}%`,
+      }
+    : undefined
 
   return (
     <>
@@ -754,13 +782,15 @@ function App() {
                     ? 'エラー'
                     : candidatePending
                       ? '画像を読み込み中…'
+                      : fullOutputPending
+                        ? '保存用画像を確認中…'
                       : previewPending
                         ? '圧縮プレビューを更新中…'
                         : '処理中…'
-                  : renderedResult
-                    ? 'プレビュー準備完了'
-                    : errorMessage
-                      ? 'エラー'
+                  : errorMessage
+                    ? 'エラー'
+                    : renderedResult
+                      ? 'プレビュー準備完了'
                       : '画像を準備中'}
               </span>
             ) : null}
@@ -790,6 +820,13 @@ function App() {
           <>
             <section className="workspace" aria-label="画像エディター">
               <div className="editor-column">
+                <div className="crop-editor-heading">
+                  <div>
+                    <p className="section-kicker">EDIT</p>
+                    <h2>切り抜き範囲</h2>
+                  </div>
+                  <p className="crop-guidance">枠内が残る範囲です。暗い外側は削除されます。</p>
+                </div>
                 <div className="stage-area" aria-label="画像編集ステージ">
                   <div
                     ref={cropSurfaceRef}
@@ -799,33 +836,19 @@ function App() {
                     onPointerUp={endCropInteraction}
                     onPointerCancel={endCropInteraction}
                   >
-                    <img
-                      className="stage-image"
-                      src={asset.objectUrl}
-                      alt={`${asset.file.name} の編集対象`}
-                      draggable={false}
-                      style={stageImageStyle}
-                      aria-hidden={sourceOccluded}
-                    />
-                    <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
-                    <div className="crop-shade crop-shade-bottom" style={{ height: geometry ? `${Math.max(0, geometry.displaySize.height - currentCrop.y - currentCrop.height) / geometry.displaySize.height * 100}%` : undefined }} />
-                    <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
-                    <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: geometry ? `${Math.max(0, geometry.displaySize.width - currentCrop.x - currentCrop.width) / geometry.displaySize.width * 100}%` : undefined, height: cropStyle?.height }} />
-                    {renderedUrl && renderedResult ? (
+                    <div className="crop-image-layer">
                       <img
-                        className="processed-preview"
-                        src={renderedUrl}
-                        alt="圧縮後の画像プレビュー"
+                        className="stage-image"
+                        src={asset.objectUrl}
+                        alt={`${asset.file.name} の編集対象`}
                         draggable={false}
-                        style={{ ...cropStyle, visibility: showingOriginalComparison ? 'hidden' : 'visible' }}
-                        aria-hidden={showingOriginalComparison}
+                        style={stageImageStyle}
                       />
-                    ) : null}
-                    {pendingMaskVisible ? (
-                      <div className="processed-preview-pending" style={cropStyle} role="status" aria-live="polite">
-                        圧縮プレビューを更新中…
-                      </div>
-                    ) : null}
+                      <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
+                      <div className="crop-shade crop-shade-bottom" style={{ height: geometry ? `${Math.max(0, geometry.displaySize.height - currentCrop.y - currentCrop.height) / geometry.displaySize.height * 100}%` : undefined }} />
+                      <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
+                      <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: geometry ? `${Math.max(0, geometry.displaySize.width - currentCrop.x - currentCrop.width) / geometry.displaySize.width * 100}%` : undefined, height: cropStyle?.height }} />
+                    </div>
                     <div
                       className="crop-rectangle"
                       style={cropStyle}
@@ -846,47 +869,24 @@ function App() {
                       <button
                         className="crop-handle"
                         type="button"
-                        aria-label="切り抜き範囲をリサイズ"
+                        aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ"
                         onPointerDown={(event) => beginCropInteraction(event, 'resize')}
                       />
                     </div>
                   </div>
-                  <div className="stage-controls">
-                    <span className={`stage-preview-label${showingOriginalComparison ? ' is-original' : ''}`} aria-live="polite">
-                      {previewModeLabel}
-                    </span>
-                    <button
-                      ref={comparisonButtonRef}
-                      className={`comparison-hold-button${showingOriginalComparison ? ' is-active' : ''}`}
-                      type="button"
-                      disabled={!comparisonAvailable}
-                      aria-pressed={showingOriginalComparison}
-                      aria-label="押して元画像を表示。離すと圧縮後に戻ります"
-                      onPointerDown={beginOriginalComparison}
-                      onPointerUp={endOriginalComparison}
-                      onPointerCancel={endOriginalComparison}
-                      onLostPointerCapture={() => releaseOriginalComparison()}
-                      onBlur={() => releaseOriginalComparison()}
-                      onKeyDown={(event) => {
-                        if (event.key !== ' ' && event.key !== 'Enter') {
-                          return
-                        }
-                        event.preventDefault()
-                        if (!event.repeat && comparisonAvailable) {
-                          setShowingOriginal(true)
-                        }
-                      }}
-                      onKeyUp={(event) => {
-                        if (event.key === ' ' || event.key === 'Enter') {
-                          event.preventDefault()
-                          releaseOriginalComparison()
-                        }
-                      }}
-                      onContextMenu={(event) => event.preventDefault()}
-                    >
-                      押して元画像を表示
-                    </button>
-                  </div>
+                </div>
+
+                <div className="crop-stage-meta" aria-live="polite">
+                  <span className="stage-preview-label">元画像（切り抜き編集）</span>
+                  <span className="crop-processing-status">
+                    {candidatePending
+                      ? '新しい画像を読み込み中…'
+                      : previewPending
+                        ? 'プレビュー更新中。切り抜きはそのまま操作できます。'
+                        : errorMessage
+                          ? '結果を更新できませんでした。元画像の編集は続けられます。'
+                          : '画像上の枠をドラッグして位置を調整できます。'}
+                  </span>
                 </div>
 
                 <div className="button-row editor-actions">
@@ -902,6 +902,189 @@ function App() {
                     </select>
                   </div>
                 </div>
+
+                <section className="comparison-section" aria-labelledby="comparison-heading">
+                  <div className="section-heading comparison-heading">
+                    <div>
+                      <p className="section-kicker">COMPARE</p>
+                      <h2 id="comparison-heading">仕上がりを確認</h2>
+                    </div>
+                    <p className="comparison-guidance">元画像と結果を同じ切り抜き位置で見比べます。</p>
+                  </div>
+
+                  <div className={`comparison-card comparison-mode-${comparisonMode}`}>
+                    <div
+                      className={`comparison-viewport${actualInspectionAvailable && comparisonInspection === 'actual' ? ' is-actual' : ''}`}
+                      style={comparisonViewportStyle}
+                      tabIndex={0}
+                      aria-label="元画像と出力結果の比較表示"
+                    >
+                      <div className={`comparison-canvas${actualInspectionAvailable && comparisonInspection === 'actual' ? ' is-actual' : ''}`} style={comparisonCanvasStyle}>
+                        <div
+                          className="comparison-layer comparison-original-layer"
+                          style={comparisonMode === 'compare'
+                            ? { clipPath: `inset(0 ${100 - comparisonSplit}% 0 0)` }
+                            : comparisonMode === 'result'
+                              ? { visibility: 'hidden' }
+                              : undefined}
+                          aria-hidden={comparisonMode === 'result'}
+                        >
+                          <div className="comparison-source-canvas" style={comparisonSourceCanvasStyle}>
+                            <img
+                              className="comparison-original-image"
+                              src={asset.objectUrl}
+                              alt="元画像の切り抜き・変換後フレーム"
+                              draggable={false}
+                              style={stageImageStyle}
+                            />
+                          </div>
+                          <span className="comparison-layer-label">元画像</span>
+                        </div>
+
+                        <div
+                          className="comparison-layer comparison-result-layer"
+                          style={comparisonMode === 'original' ? { visibility: 'hidden' } : undefined}
+                          aria-hidden={comparisonMode === 'original'}
+                        >
+                          {comparisonAvailable ? (
+                            <img
+                              className="processed-preview comparison-result-image"
+                              src={renderedUrl}
+                              alt="圧縮後の出力結果"
+                              draggable={false}
+                              data-preview-kind={renderedIsPreview ? 'quick' : 'full'}
+                              data-output-width={renderedResult?.width}
+                              data-output-height={renderedResult?.height}
+                              data-output-bytes={renderedResult?.bytes}
+                            />
+                          ) : null}
+                          {comparisonAvailable ? (
+                            <span className="comparison-layer-label comparison-result-label">
+                              {renderedIsPreview ? 'クイック確認' : '保存用画像'}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {comparisonMode === 'compare' && comparisonAvailable ? (
+                          <div className="comparison-divider" style={{ left: `${comparisonSplit}%` }} aria-hidden="true" />
+                        ) : null}
+                        {!comparisonAvailable ? (
+                          <div className="comparison-empty" role="status" aria-live="polite">
+                            {previewPending || fullOutputPending
+                              ? '出力結果を更新中…'
+                              : errorMessage
+                                ? '出力結果を表示できません。元画像で編集できます。'
+                                : '出力結果を準備しています…'}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="comparison-mode-buttons" role="group" aria-label="比較表示モード">
+                      <button
+                        className={`comparison-mode-button${comparisonMode === 'original' ? ' is-selected' : ''}`}
+                        type="button"
+                        data-comparison-mode="original"
+                        aria-pressed={comparisonMode === 'original'}
+                        onClick={() => setComparisonMode('original')}
+                      >
+                        元画像
+                      </button>
+                      <button
+                        className={`comparison-mode-button${comparisonMode === 'compare' ? ' is-selected' : ''}`}
+                        type="button"
+                        data-comparison-mode="compare"
+                        aria-pressed={comparisonMode === 'compare'}
+                        onClick={() => setComparisonMode('compare')}
+                      >
+                        比較
+                      </button>
+                      <button
+                        className={`comparison-mode-button${comparisonMode === 'result' ? ' is-selected' : ''}`}
+                        type="button"
+                        data-comparison-mode="result"
+                        disabled={!comparisonAvailable}
+                        aria-pressed={comparisonMode === 'result'}
+                        onClick={() => setComparisonMode('result')}
+                      >
+                        出力結果
+                      </button>
+                    </div>
+
+                    {outputMime === 'image/png' ? (
+                      <p className="comparison-quality-note">PNGでは保存画質の設定はありません。</p>
+                    ) : (
+                      <div className="range-control comparison-quality-control">
+                        <div className="range-label"><label htmlFor="quality">保存画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
+                        <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} aria-describedby="quality-help" onChange={(event) => updateQuality(Number(event.target.value))} />
+                        <span id="quality-help" className="field-help">JPEG・WebPのエンコード設定。劣化率ではありません。</span>
+                      </div>
+                    )}
+
+                    <div className="range-control comparison-split-control">
+                      <div className="range-label">
+                        <label htmlFor="comparison-split">比較の境界</label>
+                        <output htmlFor="comparison-split">{comparisonSplit}% 元画像</output>
+                      </div>
+                      <input
+                        id="comparison-split"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={comparisonSplit}
+                        disabled={!comparisonAvailable || comparisonMode !== 'compare'}
+                        aria-label="元画像と出力結果の比較境界。0は出力結果のみ、100は元画像のみ"
+                        onChange={(event) => setComparisonSplit(Number(event.target.value))}
+                      />
+                      <div className="comparison-endpoints" aria-hidden="true"><span>出力結果</span><span>元画像</span></div>
+                    </div>
+
+                    <div className="comparison-inspection-controls" role="group" aria-label="比較画像の表示倍率">
+                      <span className="field-label">表示</span>
+                      <button
+                        className={`comparison-inspection-button${comparisonInspection === 'fit' ? ' is-selected' : ''}`}
+                        type="button"
+                        aria-pressed={comparisonInspection === 'fit'}
+                        onClick={() => setComparisonInspection('fit')}
+                      >
+                        全体表示
+                      </button>
+                      <button
+                        className={`comparison-inspection-button${comparisonInspection === 'actual' ? ' is-selected' : ''}`}
+                        type="button"
+                        disabled={!actualInspectionAvailable}
+                        aria-pressed={comparisonInspection === 'actual'}
+                        onClick={() => setComparisonInspection('actual')}
+                      >
+                        100%表示
+                      </button>
+                      <span className="field-help">100%表示は保存用画像の1pxを画面の1pxで確認します。必要に応じてスクロールできます。</span>
+                    </div>
+
+                    <div className="comparison-footer">
+                      <p className="comparison-status">
+                        {comparisonAvailable
+                          ? renderedIsPreview
+                            ? 'クイック確認：最大960pxに縮小した確認用です。容量もこの確認用画像の値です。'
+                            : '保存用画像：実際に保存される解像度・エンコード結果を確認しています。'
+                          : '結果がない間も、上の元画像で切り抜き範囲を操作できます。'}
+                      </p>
+                      <button
+                        className="verify-output-button"
+                        type="button"
+                        disabled={!processorReady || candidatePending || previewPending || exportPending || fullOutputPending || Boolean(fullOutputResult)}
+                        onClick={() => void confirmFullOutput()}
+                      >
+                        {fullOutputPending
+                          ? '保存サイズを確認中…'
+                          : fullOutputResult
+                            ? '保存サイズを確認済み'
+                            : '保存サイズを確認（フルサイズ）'}
+                      </button>
+                    </div>
+                  </div>
+                </section>
               </div>
 
               <aside className="settings-column" aria-label="出力設定">
@@ -916,14 +1099,6 @@ function App() {
                   <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
                     {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
-
-                  {outputMime === 'image/png' ? null : (
-                    <div className="range-control quality-control">
-                      <div className="range-label"><label htmlFor="quality">品質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
-                      <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
-                      <span className="field-help">JPEG・WebPのみ</span>
-                    </div>
-                  )}
 
                   <div className="resize-fields">
                     <div className="field-label-row"><span className="field-label">出力サイズ</span><span className="field-help">幅または高さ</span></div>
@@ -950,9 +1125,11 @@ function App() {
                 <div className="metrics-card" aria-label="画像メトリクス">
                   <div className="metric-line"><span>元画像</span><strong>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</strong></div>
                   <div className="metric-line"><span>元の容量</span><strong>{formatBytes(asset.file.size)}</strong></div>
-                  <div className="metric-line"><span>{renderedIsPreview ? '出力プレビュー' : '出力画像'}</span><strong>{metrics ? formatDimensions({ width: metrics.outputWidth, height: metrics.outputHeight }) : '—'}</strong></div>
-                  <div className="metric-line"><span>出力容量</span><strong>{metrics ? formatBytes(metrics.outputBytes) : '—'}</strong></div>
-                  <div className="reduction-line"><span>容量の変化</span><strong>{metrics ? `${metrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(metrics.reductionPercent).toFixed(1)}%` : '—'}</strong></div>
+                  <div className="metric-line quick-preview-metrics"><span>クイックプレビュー寸法（最大960px）</span><strong className="quick-preview-dimensions">{quickPreviewMetrics ? formatDimensions({ width: quickPreviewMetrics.outputWidth, height: quickPreviewMetrics.outputHeight }) : '未生成'}</strong></div>
+                  <div className="metric-line quick-preview-bytes"><span>クイックプレビュー容量</span><strong className="quick-preview-bytes-value">{quickPreviewMetrics ? formatBytes(quickPreviewMetrics.outputBytes) : '未生成'}</strong></div>
+                  <div className="metric-line full-output-metrics"><span>保存用画像寸法</span><strong className="full-output-dimensions">{fullOutputMetrics ? formatDimensions({ width: fullOutputMetrics.outputWidth, height: fullOutputMetrics.outputHeight }) : '未確認'}</strong></div>
+                  <div className="metric-line full-output-bytes"><span>保存用画像容量</span><strong className="full-output-bytes-value">{fullOutputMetrics ? formatBytes(fullOutputMetrics.outputBytes) : '未確認'}</strong></div>
+                  <div className="reduction-line"><span>容量の変化（保存用画像）</span><strong>{fullOutputMetrics ? `${fullOutputMetrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}%` : '未確認'}</strong></div>
                 </div>
 
               </aside>

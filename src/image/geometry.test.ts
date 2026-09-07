@@ -5,6 +5,7 @@ import {
   calculateImageGeometry,
   constrainCrop,
   createEditState,
+  resizeCropFromBottomRight,
   rotateEditState,
   translateCrop,
   type ImageEditState,
@@ -303,6 +304,111 @@ describe('image geometry', () => {
 
     expect(crop).toEqual({ x: 300, y: 45, width: 320, height: 240 })
     expect(crop.width / crop.height).toBeCloseTo(4 / 3)
+  })
+
+  describe('bottom-right anchored crop resizing', () => {
+    it('keeps the top-left fixed for free horizontal, vertical, and diagonal drags', () => {
+      const crop = { x: 40, y: 30, width: 100, height: 100 }
+      const displaySize = { width: 400, height: 300 }
+
+      expect(resizeCropFromBottomRight(crop, { x: 60, y: 0 }, displaySize, 'free')).toEqual({
+        x: 40,
+        y: 30,
+        width: 160,
+        height: 100,
+      })
+      expect(resizeCropFromBottomRight(crop, { x: 0, y: 60 }, displaySize, 'free')).toEqual({
+        x: 40,
+        y: 30,
+        width: 100,
+        height: 160,
+      })
+      expect(resizeCropFromBottomRight(crop, { x: 60, y: 40 }, displaySize, 'free')).toEqual({
+        x: 40,
+        y: 30,
+        width: 160,
+        height: 140,
+      })
+    })
+
+    it('projects horizontal and vertical pointer movement onto a fixed ratio', () => {
+      const crop = { x: 40, y: 30, width: 120, height: 90 }
+      const displaySize = { width: 400, height: 300 }
+
+      const horizontal = resizeCropFromBottomRight(crop, { x: 60, y: 0 }, displaySize, '4:3')
+      expect(horizontal.x).toBe(40)
+      expect(horizontal.y).toBe(30)
+      expect(horizontal.width).toBeCloseTo(158.4)
+      expect(horizontal.height).toBeCloseTo(118.8)
+
+      const vertical = resizeCropFromBottomRight(crop, { x: 0, y: 60 }, displaySize, '4:3')
+      expect(vertical.x).toBe(40)
+      expect(vertical.y).toBe(30)
+      expect(vertical.width).toBeCloseTo(148.8)
+      expect(vertical.height).toBeCloseTo(111.6)
+    })
+
+    it('keeps mixed-sign fixed-ratio pointer movement continuous', () => {
+      const crop = { x: 40, y: 30, width: 100, height: 100 }
+      const displaySize = { width: 400, height: 300 }
+      const before = resizeCropFromBottomRight(crop, { x: 49, y: -50 }, displaySize, '1:1')
+      const after = resizeCropFromBottomRight(crop, { x: 50, y: -50 }, displaySize, '1:1')
+
+      expect(before.width).toBeCloseTo(99.5)
+      expect(after.width).toBeCloseTo(100)
+      expect(Math.abs(after.width - before.width)).toBeLessThan(2)
+    })
+
+    it('keeps the anchor while clamping expansion and shrinkage to valid bounds', () => {
+      const crop = { x: 280, y: 190, width: 100, height: 80 }
+      const displaySize = { width: 400, height: 300 }
+
+      expect(resizeCropFromBottomRight(crop, { x: 500, y: 500 }, displaySize, 'free')).toEqual({
+        x: 280,
+        y: 190,
+        width: 120,
+        height: 110,
+      })
+      expect(resizeCropFromBottomRight(crop, { x: -500, y: -500 }, displaySize, 'free')).toEqual({
+        x: 280,
+        y: 190,
+        width: 1,
+        height: 1,
+      })
+
+      const fixed = resizeCropFromBottomRight(
+        { x: 250, y: 150, width: 100, height: 100 },
+        { x: 500, y: 500 },
+        displaySize,
+        '1:1',
+      )
+      expect(fixed).toEqual({ x: 250, y: 150, width: 150, height: 150 })
+    })
+
+    it('uses the effective crop anchor after rotation and zoom/pan', () => {
+      const sourceSize = { width: 1000, height: 600 }
+      const state: ImageEditState = {
+        ...createEditState(sourceSize),
+        rotation: 90,
+        aspectRatio: 'free',
+        crop: { x: 80, y: 50, width: 400, height: 300 },
+        zoom: 2,
+        panX: 0.25,
+        panY: -0.4,
+      }
+      const geometry = calculateImageGeometry(sourceSize, state)
+      const resized = resizeCropFromBottomRight(
+        geometry.crop,
+        { x: 40, y: 20 },
+        geometry.displaySize,
+        state.aspectRatio,
+      )
+
+      expect(resized.x).toBe(geometry.crop.x)
+      expect(resized.y).toBe(geometry.crop.y)
+      expect(resized.width).toBe(geometry.crop.width + 40)
+      expect(resized.height).toBe(geometry.crop.height + 20)
+    })
   })
 
   it('applies zoom and clamps normalized pan inside the display bounds', () => {
