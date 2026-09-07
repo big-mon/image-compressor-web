@@ -765,6 +765,8 @@ h2 {
   bottom: 0;
   width: 2.75rem;
   height: 2.75rem;
+  max-width: 40%;
+  max-height: 40%;
   padding: 0;
   border: 0;
   border-radius: 0.5rem;
@@ -776,10 +778,11 @@ h2 {
 
 .crop-handle::after {
   position: absolute;
-  right: 0.2rem;
-  bottom: 0.2rem;
-  width: 1.1rem;
-  height: 1.1rem;
+  right: 0;
+  bottom: 0;
+  width: min(1.1rem, 100%);
+  height: min(1.1rem, 100%);
+  pointer-events: none;
   border: 2px solid #0b1212;
   border-radius: 0.25rem;
   background: var(--mint);

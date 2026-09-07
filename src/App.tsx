@@ -674,7 +674,7 @@ function App() {
     const output = { mimeType: outputMime, quality, preview: false }
 
     try {
-      const result = await processor.process(asset.pixels, editState, output)
+      const result = fullOutputResult ?? await processor.process(asset.pixels, editState, output)
       const isCurrent = exportActiveRef.current?.requestId === requestId &&
         resultIntentGenerationRef.current === intentGeneration &&
         isSameResultIntent(currentIntentRef.current, expectedIntent)
@@ -733,13 +733,16 @@ function App() {
   const errorMessage = fileError || processingError || processorError
   const busy = candidatePending || previewPending || fullOutputPending || exportPending
   const comparisonFrameStyle: CSSProperties | undefined = geometry
-    ? { aspectRatio: `${geometry.outputSize.width} / ${geometry.outputSize.height}` }
+    ? {
+        aspectRatio: `${geometry.crop.width} / ${geometry.crop.height}`,
+        maxWidth: `min(56rem, calc(38rem * ${geometry.crop.width / geometry.crop.height}))`,
+      }
     : undefined
   const actualInspectionAvailable = comparisonAvailable && !renderedIsPreview && fullOutputResult !== undefined && renderedResult !== undefined
   const comparisonViewportStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual'
     ? { height: 'min(38rem, 70vh)' }
     : comparisonFrameStyle
-  const comparisonCanvasStyle: CSSProperties | undefined = actualInspectionAvailable && renderedResult
+  const comparisonCanvasStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual' && renderedResult
     ? {
         width: `${renderedResult.width}px`,
         height: `${renderedResult.height}px`,

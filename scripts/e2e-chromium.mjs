@@ -1972,6 +1972,14 @@ async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadD
   await setControlValue(cdp, sessionId, cropInputSelectors[1], 100)
   await setControlValue(cdp, sessionId, cropInputSelectors[2], 300)
   await setControlValue(cdp, sessionId, cropInputSelectors[3], 200)
+  await setControlValue(cdp, sessionId, cropInputSelectors[2], 30)
+  await setControlValue(cdp, sessionId, cropInputSelectors[3], 20)
+  await dragCropRectangle(cdp, sessionId, 'right-bottom')
+  await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '970,580,30,20'`, 'the tiny crop moved without resizing')
+  await setControlValue(cdp, sessionId, cropInputSelectors[0], 200)
+  await setControlValue(cdp, sessionId, cropInputSelectors[1], 100)
+  await setControlValue(cdp, sessionId, cropInputSelectors[2], 300)
+  await setControlValue(cdp, sessionId, cropInputSelectors[3], 200)
   const anchoredInitial = await waitFor(async () => {
     const crop = await evaluate(cdp, sessionId, `(() => [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value)))()`)
     if (JSON.stringify(crop) === JSON.stringify([200, 100, 300, 200])) return crop
@@ -2617,7 +2625,17 @@ async function runComparisonPersistenceRegression({ cdp, sessionId }) {
   }
 }
 
-async function runFullOutputComparisonRegression({ cdp, cropDragFixturePath, fixturePath, sessionId }) {
+async function assertFitComparison(cdp, sessionId, ratio) {
+  const size = await evaluate(cdp, sessionId, `(() => {
+    const viewport = document.querySelector('.comparison-viewport')
+    const canvas = document.querySelector('.comparison-canvas').getBoundingClientRect()
+    return { width: viewport.clientWidth, height: viewport.clientHeight, canvasWidth: canvas.width, canvasHeight: canvas.height }
+  })()`)
+  assert(size.width > 0 && size.height > 0 && Math.abs(size.width / size.height - ratio) < 0.02, `Fit comparison lost its crop ratio: ${JSON.stringify({ size, ratio })}`)
+  assert(Math.abs(size.canvasWidth - size.width) < 2 && Math.abs(size.canvasHeight - size.height) < 2, `Fit comparison clips its canvas: ${JSON.stringify(size)}`)
+}
+
+async function runFullOutputComparisonRegression({ cdp, cropDragFixturePath, downloadDirectory, fixturePath, sessionId }) {
   await restoreReadySource(cdp, sessionId, cropDragFixturePath, 'full-size comparison source', '1000 × 600 px')
   await clickButton(cdp, sessionId, '比較')
   const quick = await waitFor(async () => {
@@ -2670,6 +2688,9 @@ async function runFullOutputComparisonRegression({ cdp, cropDragFixturePath, fix
       if (gate?.held && state.fullButton.disabled && state.fullButton.text.includes('確認中')) return { gate, state }
       throw new Error(`The full-size confirmation retry was not held as busy: ${JSON.stringify({ gate, state })}`)
     }, 'the retry full-size confirmation', PR8_ASSERTION_TIMEOUT_MS)
+    await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.payload.worker.addEventListener('message', (event) => {
+      window.__e2eConfirmedBytes = event.data.blob.arrayBuffer().then((buffer) => Array.from(new Uint8Array(buffer)))
+    }, { once: true })`)
     assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The full-size confirmation retry was not released.')
     full = await waitFor(async () => {
       const state = await readComparisonState(cdp, sessionId)
@@ -2687,6 +2708,7 @@ async function runFullOutputComparisonRegression({ cdp, cropDragFixturePath, fix
     const reportedFullBytes = await evaluate(cdp, sessionId, "Number(document.querySelector('.comparison-result-image')?.getAttribute('data-output-bytes'))")
     assert(reportedFullBytes === full.resultImage.outputBytes, `Full output byte metrics changed between the Worker result and comparison image: ${JSON.stringify({ full, reportedFullBytes })}`)
     assertComparisonRectsAligned(full, 'full-size comparison alignment')
+    await assertFitComparison(cdp, sessionId, 1000 / 600)
     await clickButton(cdp, sessionId, '100%表示')
     const actualInspection = await waitFor(async () => {
       const state = await readComparisonState(cdp, sessionId)
@@ -2697,14 +2719,26 @@ async function runFullOutputComparisonRegression({ cdp, cropDragFixturePath, fix
     await clickButton(cdp, sessionId, '全体表示')
     await waitForDom(cdp, sessionId, `document.querySelector('.comparison-inspection-button[aria-pressed="true"]')?.textContent?.trim() === '全体表示'`, 'the fit comparison after 100% inspection')
     await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
+    await assertFitComparison(cdp, sessionId, 1000 / 600)
     desktopScreenshot = await captureScreenshot(cdp, sessionId, 'comparison-full-desktop.png')
     await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
     await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the mobile full-size comparison viewport')
     await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
+    await assertFitComparison(cdp, sessionId, 1000 / 600)
     mobileScreenshot = await captureScreenshot(cdp, sessionId, 'comparison-full-mobile.png')
     await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
     await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after full-size comparison')
     await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
+
+    const confirmedBytes = await evaluate(cdp, sessionId, 'window.__e2eConfirmedBytes')
+    const cachedDownloadPath = join(downloadDirectory, 'e2e-crop-drag-edited.jpg')
+    await rm(cachedDownloadPath, { force: true })
+    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
+    await clickButton(cdp, sessionId, 'ダウンロード')
+    assert(!(await readWorkerProcessGate(cdp, sessionId)).held, 'Downloading a confirmed result submitted another Worker request.')
+    await waitForDownloadedFile(downloadDirectory, 'e2e-crop-drag-edited.jpg')
+    assert((await readFile(cachedDownloadPath)).equals(Buffer.from(confirmedBytes)), 'Downloaded bytes differ from the confirmed full-size image.')
+    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm(); delete window.__e2eConfirmedBytes')
 
     const staleQualityBefore = await readPr8State(cdp, sessionId)
     const staleQuality = Math.abs(staleQualityBefore.quality - 0.63) < 0.001 ? 0.74 : 0.63
@@ -2755,6 +2789,7 @@ async function runFullOutputComparisonRegression({ cdp, cropDragFixturePath, fix
     await dispatchFileDrop(cdp, sessionId, '.change-image-button', fixturePath, 'e2e-metadata-fixture-replacement.jpg')
     await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(beforeRestore.sourceUrl)}`, 'the named source after full-size comparison')
     await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.quick-preview-dimensions')?.textContent?.trim() === '16 × 32 px'`, 'the replacement preview after full-size comparison')
+    await assertFitComparison(cdp, sessionId, 0.5)
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2ePreviewDebounceGate.disarm()').catch(() => {})
     await evaluate(cdp, sessionId, 'window.__e2ePreviewDebounceGate.remove()').catch(() => {})
@@ -3608,6 +3643,10 @@ async function runRoundedPreviewRegression({ cdp, fixturePath, sessionId }) {
     throw new Error(`Rounded preview is not ready with a real 5 x 4 output: ${JSON.stringify(next)}`)
   }, 'the real 5 x 4 rounded preview')
 
+  await assertFitComparison(cdp, sessionId, 4 / 3)
+  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
+  await assertFitComparison(cdp, sessionId, 4 / 3)
+  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
   assertProcessedPreviewAligned(layout, 'rounded 5 x 4')
   const preview = layout.processedPreview
   const comparison = layout.comparisonViewport
@@ -4007,6 +4046,7 @@ async function runScenario({ allowedPaths, basePath, corruptFixturePath, cropDra
 
   const fullOutputComparisonRegression = await runFullOutputComparisonRegression({
     cdp,
+    downloadDirectory,
     cropDragFixturePath,
     fixturePath,
     sessionId,

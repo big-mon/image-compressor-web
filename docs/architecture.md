@@ -20,7 +20,7 @@ File/drop
   → App の object URL、metrics、download
 ```
 
-`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、明示的な保存サイズ確認と download では full output size を要求する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
+`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、明示的な保存サイズ確認と download では full output size を要求する。同じ編集 intent の確認済み full result があれば download はその Blob を再利用する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
 
 ## Module contracts and seams
 
