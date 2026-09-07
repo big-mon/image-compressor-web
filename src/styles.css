@@ -307,7 +307,7 @@ h2 {
   height: clamp(30rem, calc(100svh - 11.5rem), 48rem);
   min-height: 0;
   place-items: center;
-  padding: clamp(0.35rem, 1.1vw, 1rem);
+  padding: clamp(0.35rem, 1.1vw, 1rem) 2.75rem 2.75rem clamp(0.35rem, 1.1vw, 1rem);
   border: 1px solid var(--line);
   border-radius: 1rem;
   background: #10181a;
@@ -320,13 +320,21 @@ h2 {
   max-width: 100%;
   height: auto;
   max-height: 100%;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid #415459;
   border-radius: 1rem;
   background: #070a0b;
   box-shadow: 0 1.25rem 3.5rem rgb(0 0 0 / 25%);
   isolation: isolate;
   touch-action: none;
+}
+
+.crop-image-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  z-index: 0;
 }
 
 .stage-image {
@@ -761,12 +769,10 @@ h2 {
 
 .crop-handle {
   position: absolute;
-  right: 0;
-  bottom: 0;
+  right: -2.75rem;
+  bottom: -2.75rem;
   width: 2.75rem;
   height: 2.75rem;
-  max-width: 40%;
-  max-height: 40%;
   padding: 0;
   border: 0;
   border-radius: 0.5rem;
@@ -778,10 +784,10 @@ h2 {
 
 .crop-handle::after {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: min(1.1rem, 100%);
-  height: min(1.1rem, 100%);
+  left: 0;
+  top: 0;
+  width: 1.1rem;
+  height: 1.1rem;
   pointer-events: none;
   border: 2px solid #0b1212;
   border-radius: 0.25rem;
@@ -1296,7 +1302,7 @@ input[type="range"] {
 
   .stage-area {
     height: clamp(27rem, calc(100svh - 9rem), 42rem);
-    padding: 0.3rem;
+    padding: 0.3rem 2.75rem 2.75rem 0.3rem;
   }
 
   .crop-stage-meta {

@@ -836,17 +836,19 @@ function App() {
                     onPointerUp={endCropInteraction}
                     onPointerCancel={endCropInteraction}
                   >
-                    <img
-                      className="stage-image"
-                      src={asset.objectUrl}
-                      alt={`${asset.file.name} の編集対象`}
-                      draggable={false}
-                      style={stageImageStyle}
-                    />
-                    <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
-                    <div className="crop-shade crop-shade-bottom" style={{ height: geometry ? `${Math.max(0, geometry.displaySize.height - currentCrop.y - currentCrop.height) / geometry.displaySize.height * 100}%` : undefined }} />
-                    <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
-                    <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: geometry ? `${Math.max(0, geometry.displaySize.width - currentCrop.x - currentCrop.width) / geometry.displaySize.width * 100}%` : undefined, height: cropStyle?.height }} />
+                    <div className="crop-image-layer">
+                      <img
+                        className="stage-image"
+                        src={asset.objectUrl}
+                        alt={`${asset.file.name} の編集対象`}
+                        draggable={false}
+                        style={stageImageStyle}
+                      />
+                      <div className="crop-shade crop-shade-top" style={{ height: cropStyle?.top }} />
+                      <div className="crop-shade crop-shade-bottom" style={{ height: geometry ? `${Math.max(0, geometry.displaySize.height - currentCrop.y - currentCrop.height) / geometry.displaySize.height * 100}%` : undefined }} />
+                      <div className="crop-shade crop-shade-left" style={{ top: cropStyle?.top, width: cropStyle?.left, height: cropStyle?.height }} />
+                      <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: geometry ? `${Math.max(0, geometry.displaySize.width - currentCrop.x - currentCrop.width) / geometry.displaySize.width * 100}%` : undefined, height: cropStyle?.height }} />
+                    </div>
                     <div
                       className="crop-rectangle"
                       style={cropStyle}

@@ -1976,6 +1976,33 @@ async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadD
   await setControlValue(cdp, sessionId, cropInputSelectors[3], 20)
   await dragCropRectangle(cdp, sessionId, 'right-bottom')
   await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '970,580,30,20'`, 'the tiny crop moved without resizing')
+  for (const viewport of [MOBILE_VIEWPORT, DESKTOP_VIEWPORT]) {
+    await setViewport(cdp, sessionId, viewport)
+    await setControlValue(cdp, sessionId, cropInputSelectors[2], 1)
+    await setControlValue(cdp, sessionId, cropInputSelectors[3], 1)
+    await setControlValue(cdp, sessionId, cropInputSelectors[0], 999)
+    await setControlValue(cdp, sessionId, cropInputSelectors[1], 599)
+    await evaluate(cdp, sessionId, "document.querySelector('.crop-handle').scrollIntoView({ block: 'center' })")
+    const target = await evaluate(cdp, sessionId, `(() => {
+      const handle = document.querySelector('.crop-handle')
+      const rect = handle.getBoundingClientRect()
+      const crop = document.querySelector('.crop-rectangle').getBoundingClientRect()
+      const stage = document.querySelector('.stage-area').getBoundingClientRect()
+      return {
+        width: rect.width, height: rect.height,
+        outsideCrop: rect.left >= crop.right - 1 && rect.top >= crop.bottom - 1,
+        insideStage: rect.right <= stage.right + 1 && rect.bottom <= stage.bottom + 1,
+        clickable: document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === handle,
+      }
+    })()`)
+    assert(target.width >= 44 && target.height >= 44 && target.outsideCrop && target.insideStage && target.clickable, `The 1px edge crop lost its full-size resize target: ${JSON.stringify({ viewport, target })}`)
+    await setControlValue(cdp, sessionId, cropInputSelectors[0], 200)
+    await setControlValue(cdp, sessionId, cropInputSelectors[1], 100)
+    await resizeCropFromBottomRightWithMouse(cdp, sessionId, { x: 20, y: 20 })
+    const resized = await evaluate(cdp, sessionId, "[...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value))")
+    assert(resized[0] === 200 && resized[1] === 100 && resized[2] > 1 && resized[3] > 1, `The 1px crop could not be resized: ${JSON.stringify(resized)}`)
+  }
+
   await setControlValue(cdp, sessionId, cropInputSelectors[0], 200)
   await setControlValue(cdp, sessionId, cropInputSelectors[1], 100)
   await setControlValue(cdp, sessionId, cropInputSelectors[2], 300)
