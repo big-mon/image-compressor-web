@@ -95,7 +95,12 @@ function drawRotatedSource(
   const renderedSourceHeight = sourceCanvas.height * renderScale
 
   context.save()
-  switch (request.state.rotation) {
+  if (geometry.straightening.degrees !== 0) {
+    context.translate(displayWidth / 2, displayHeight / 2)
+    context.scale(geometry.straightening.scale, geometry.straightening.scale)
+    context.rotate((request.state.rotation + geometry.straightening.degrees) * Math.PI / 180)
+    context.translate(-renderedSourceWidth / 2, -renderedSourceHeight / 2)
+  } else switch (request.state.rotation) {
     case 90:
       context.translate(displayWidth, 0)
       context.rotate(Math.PI / 2)

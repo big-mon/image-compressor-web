@@ -1,4 +1,4 @@
-import type { Rotation, Size } from './geometry'
+import type { ImageGeometry, Rotation, Size } from './geometry'
 
 export interface CropSurfaceStyle {
   readonly aspectRatio: string
@@ -15,12 +15,14 @@ export function createStageTransform(
   rotation: Rotation,
   flipHorizontal: boolean,
   flipVertical: boolean,
+  straightening: ImageGeometry['straightening'] = { degrees: 0, scale: 1 },
 ): string {
   return [
     'translate(-50%, -50%)',
     `scaleX(${flipHorizontal ? -1 : 1})`,
     `scaleY(${flipVertical ? -1 : 1})`,
-    `rotate(${rotation}deg)`,
+    ...(straightening.degrees === 0 ? [] : [`scale(${straightening.scale})`]),
+    `rotate(${rotation + straightening.degrees}deg)`,
   ].join(' ')
 }
 

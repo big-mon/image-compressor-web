@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyZoomAndPan,
   calculateImageGeometry,
+  calculateStraightening,
   constrainCrop,
   createEditState,
   resizeCropFromBottomRight,
@@ -530,5 +531,51 @@ describe('image geometry', () => {
       panX: 0,
       panY: 0,
     })
+  })
+})
+
+
+describe('straightening', () => {
+  it.each([NaN, Infinity, -Infinity, 45.1, -45.1])('rejects invalid angle %s', degrees => {
+    expect(() => calculateStraightening({ width: 400, height: 300 }, degrees)).toThrow(/Straightening/)
+  })
+
+  it.each([{ width: 400, height: 300 }, { width: 300, height: 400 }, { width: 1000, height: 100 }])('covers every corner without changing the frame: %j', size => {
+    for (const rotation of [0, 90, 180, 270] as const) {
+      for (const straighten of [-45, -17.3, 0, 17.3, 45]) {
+        for (const flipHorizontal of [false, true]) {
+          for (const flipVertical of [false, true]) {
+            const state = { ...createEditState(size), rotation, straighten, flipHorizontal, flipVertical, aspectRatio: 'free' as const,
+              crop: { x: 0, y: 0, width: 10000, height: 10000 } }
+            const geometry = calculateImageGeometry(size, state)
+            const zero = calculateImageGeometry(size, { ...state, straighten: 0 })
+            expect(geometry.crop).toEqual(zero.crop)
+            expect(geometry.outputSize).toEqual(zero.outputSize)
+            // Bounding all four inverse-mapped corners also bounds every interior point.
+            expect(geometry.sourceCrop.x).toBeGreaterThanOrEqual(-1e-9)
+            expect(geometry.sourceCrop.y).toBeGreaterThanOrEqual(-1e-9)
+            expect(geometry.sourceCrop.x + geometry.sourceCrop.width).toBeLessThanOrEqual(size.width + 1e-9)
+            expect(geometry.sourceCrop.y + geometry.sourceCrop.height).toBeLessThanOrEqual(size.height + 1e-9)
+            const touchesEdge = Math.min(Math.abs(geometry.sourceCrop.x), Math.abs(geometry.sourceCrop.y))
+            expect(touchesEdge).toBeLessThan(1e-9)
+          }
+        }
+      }
+    }
+  })
+
+  it('inverts a non-centered crop through scale, angle and final-axis flip', () => {
+    const size = { width: 400, height: 300 }
+    const state = { ...createEditState(size), straighten: 30, flipHorizontal: true, aspectRatio: 'free' as const, crop: { x: 240, y: 50, width: 40, height: 60 } }
+    const geometry = calculateImageGeometry(size, state)
+    const radians = -Math.PI / 6
+    const points = ([[240, 50], [280, 50], [240, 110], [280, 110]] as const).map(([x, y]) => {
+      const dx = (400 - x - 200) / geometry.straightening.scale
+      const dy = (y - 150) / geometry.straightening.scale
+      return { x: 200 + dx * Math.cos(radians) - dy * Math.sin(radians), y: 150 + dx * Math.sin(radians) + dy * Math.cos(radians) }
+    })
+    expect(geometry.sourceCrop.x).toBeCloseTo(Math.min(...points.map(p => p.x)))
+    expect(geometry.sourceCrop.y).toBeCloseTo(Math.min(...points.map(p => p.y)))
+    expect(calculateImageGeometry(size, createEditState(size)).straightening).toEqual({ degrees: 0, scale: 1 })
   })
 })

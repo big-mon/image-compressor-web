@@ -98,6 +98,12 @@ describe('raster output options', () => {
     }
 
     expect(validateWorkerRequest(request)).toEqual(request)
+    for (const straighten of [-45, 0, 45]) {
+      expect(validateWorkerRequest({ ...request, state: { ...request.state, straighten } }).state.straighten).toBe(straighten)
+    }
+    for (const straighten of [-45.1, 45.1, NaN, Infinity, '10', null]) {
+      expect(() => validateWorkerRequest({ ...request, state: { ...request.state, straighten } })).toThrow(/edit state/)
+    }
     expect(() =>
       validateWorkerRequest({
         ...request,
