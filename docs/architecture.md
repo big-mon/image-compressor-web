@@ -56,20 +56,24 @@ full出力の自動計算は既存のrequest id・intent guardで採用を制御
 
 `DecodedSourcePixels` は decode 時点で source orientation を正規化した RGBA pixel buffer である。`createImageBitmap(file, { imageOrientation: 'from-image' })` が主経路で、bitmap は readback 後に close する。fallback の drawable 経路も同じ normalized-pixels interface を返す。
 
-`ImageEditState.straighten` は −45〜45 度の有限値で、未指定は0度。Worker境界で範囲・型を検証する。`geometry.straightening` が角度と自動拡大倍率を所有し、CSS stage・比較画像・Workerで共有する。90度回転後の表示寸法を W×H、傾きを θ として、倍率は `max(cosθ + H/W × |sinθ|, cosθ + W/H × |sinθ|)`。中心回転後に表示枠全体を覆う最小倍率であり、傾き変更だけでは表示寸法・crop・出力寸法を変えない。`sourceCrop` は最終軸のflip、傾き・拡大、90度回転を逆変換した四隅のbounding boxである。
+`ImageEditState.straighten` は −45〜45 度の有限値で、未指定は0度。Worker境界で範囲・型を検証する。傾きでは画像を自動拡大せず、90度回転後の寸法を W×H、傾きを θ として、表示寸法を `ceil(W cosθ + H |sinθ|) × ceil(H cosθ + W |sinθ|)` に広げ、画像全体を表示する。`geometry.straightening` の角度・倍率1をCSS stage・比較画像・Workerで共有する。
+
+`CropBounds` は表示寸法と、回転前の画像寸法・最終軸のflipを反映した傾き角度を持つ。`constrainCrop` はcropの四隅が実画像内に収まるよう、必要な場合だけ縮小し、画像軸へ逆回転した中心を許容範囲へ制限する。元の表示枠からはみ出した画像部分も選択できるが、傾きで生じた空白は選択できない。ドラッグ・数値入力・zoom/pan・Workerは同じ制約を使う。右下リサイズは左上を固定し、要求サイズまでの区間で画像の辺に達した位置に止める。
+
+`straightenEditState` は傾き変更時の表示枠の中心差をcropへ反映し、実画像内へ収める。必要な縮小では出力寸法も変わる。「元画像」の比率は傾きによる外接矩形ではなく90度回転後の元寸法を使う。`sourceCrop` は最終軸のflip、傾き、90度回転を逆変換した四隅のbounding boxである。
 
 `CropRect` の座標は常に **final displayed-orientation pixels** で表す。したがって、90/270 度では `displaySize` の width/height が入れ替わり、flip はその最終表示軸に対して適用される。`sourceCrop` はこの crop を rotation/flip を逆写像して source 座標へ説明する値であり、UI crop を source 向きで再解釈してはならない。
 
 絶対的な順序は次の通りである。
 
 1. normalized source pixels を Canvas に置く。
-2. `rotation` と `straighten` による中心回転・自動拡大で display canvas を作る。
+2. `rotation` と `straighten` による中心回転で、画像全体を含む display canvas を作る。
 3. `flipHorizontal` / `flipVertical` を display canvas の最終軸で適用する。
 4. final-display の `geometry.crop` を切り出す。
 5. `geometry.outputSize`（preview ならその比例縮小）へ resize する。
 6. requested MIME へ encode し、metadata を strip する。
 
-`stage.ts` の CSS string は合成角度の `rotate(...)` を rightmost に置き、傾きがある場合は自動拡大を挟む。CSS transform は右から適用されるため、rotate が先、scaleX/scaleY が後となり、Worker の rotate-then-final-axis-flip と一致する。rotation、flip、crop、resize のどれかの順番を変えたら、geometry/stage unit と Chromium pixel evidence を同時に更新する。
+`stage.ts` の CSS string は合成角度の `rotate(...)` を rightmost に置く。CSS transform は右から適用されるため、rotate が先、scaleX/scaleY が後となり、Worker の rotate-then-final-axis-flip と一致する。rotation、flip、crop、resize のどれかの順番を変えたら、geometry/stage unit と Chromium pixel evidence を同時に更新する。
 
 ## Encoded metadata policy
 

@@ -3,6 +3,12 @@ export interface Size {
   readonly height: number
 }
 
+/** The complete rotated image bounds; imageSize/angle describe its occupied polygon. */
+export interface CropBounds extends Size {
+  readonly imageSize?: Size
+  readonly angle?: number
+}
+
 /** A crop rectangle is always expressed in final displayed-orientation pixels. */
 export interface CropRect {
   readonly x: number
@@ -45,7 +51,7 @@ export interface ImageEditState {
 }
 
 export interface ImageGeometry {
-  readonly displaySize: Size
+  readonly displaySize: CropBounds
   readonly straightening: { readonly degrees: number; readonly scale: number }
   readonly crop: CropRect
   readonly sourceCrop: CropRect
@@ -80,11 +86,11 @@ function roundDimension(value: number): number {
 
 function getAspectRatio(
   preset: Exclude<AspectRatioPreset, 'free'>,
-  displaySize: Size,
+  displaySize: CropBounds,
 ): number {
   switch (preset) {
     case 'original':
-      return displaySize.width / displaySize.height
+      return (displaySize.imageSize ?? displaySize).width / (displaySize.imageSize ?? displaySize).height
     case '1:1':
       return 1
     case '4:3':
@@ -104,7 +110,7 @@ function getAspectRatio(
   }
 }
 
-function clampCropToBounds(crop: CropRect, displaySize: Size): CropRect {
+function clampCropToBounds(crop: CropRect, displaySize: CropBounds): CropRect {
   const width = clamp(crop.width, 1, displaySize.width)
   const height = clamp(crop.height, 1, displaySize.height)
 
@@ -127,7 +133,7 @@ function interpolatePanOrigin(neutralOrigin: number, maximumTravel: number, pan:
  */
 export function applyZoomAndPan(
   crop: CropRect,
-  displaySize: Size,
+  displaySize: CropBounds,
   zoomValue = 1,
   panXValue = 0,
   panYValue = 0,
@@ -152,7 +158,7 @@ export function applyZoomAndPan(
   }
 }
 
-export function constrainCrop(crop: CropRect, displaySize: Size, preset: AspectRatioPreset): CropRect {
+function constrainRectangularCrop(crop: CropRect, displaySize: CropBounds, preset: AspectRatioPreset): CropRect {
   if (preset === 'free') {
     return clampCropToBounds(crop, displaySize)
   }
@@ -189,16 +195,43 @@ export function constrainCrop(crop: CropRect, displaySize: Size, preset: AspectR
   }
 }
 
+/** Fit all four crop corners inside the actual rotated image, not just its bounding box. */
+export function constrainCrop(crop: CropRect, bounds: CropBounds, preset: AspectRatioPreset): CropRect {
+  const rect = constrainRectangularCrop(crop, bounds, preset)
+  if (!bounds.imageSize || !bounds.angle) return rect
+  const radians = bounds.angle * Math.PI / 180
+  const c = Math.cos(radians), s = Math.sin(radians)
+  const image = bounds.imageSize
+  const factor = Math.min(1,
+    image.width / (Math.abs(c) * rect.width + Math.abs(s) * rect.height),
+    image.height / (Math.abs(s) * rect.width + Math.abs(c) * rect.height),
+  )
+  const width = rect.width * factor, height = rect.height * factor
+  const dx = rect.x + rect.width / 2 - bounds.width / 2
+  const dy = rect.y + rect.height / 2 - bounds.height / 2
+  const limitX = Math.max(0, (image.width - Math.abs(c) * width - Math.abs(s) * height) / 2)
+  const limitY = Math.max(0, (image.height - Math.abs(s) * width - Math.abs(c) * height) / 2)
+  const x = clamp(c * dx + s * dy, -limitX, limitX)
+  const y = clamp(-s * dx + c * dy, -limitY, limitY)
+  return { x: bounds.width / 2 + c * x - s * y - width / 2,
+    y: bounds.height / 2 + s * x + c * y - height / 2, width, height }
+}
+
+function cropIsInside(crop: CropRect, bounds: CropBounds): boolean {
+  const fitted = constrainCrop(crop, bounds, 'free')
+  return (['x', 'y', 'width', 'height'] as const).every(key => Math.abs(crop[key] - fitted[key]) < 1e-8)
+}
+
 /**
  * Resizes from the bottom-right handle while keeping the top-left anchor
  * fixed. For a locked ratio, the pointer delta is continuously projected onto
  * the ratio ray, so horizontal-only and vertical-only drags both resize the
  * frame without a discontinuity when the pointer changes direction.
  */
-export function resizeCropFromBottomRight(
+function resizeRectangularCropFromBottomRight(
   crop: CropRect,
   delta: Pick<CropRect, 'x' | 'y'>,
-  displaySize: Size,
+  displaySize: CropBounds,
   preset: AspectRatioPreset,
 ): CropRect {
   const availableWidth = Math.max(1, displaySize.width - crop.x)
@@ -230,11 +263,29 @@ export function resizeCropFromBottomRight(
   }
 }
 
+/** Stop a resize at the rotated image edge while retaining the top-left anchor. */
+export function resizeCropFromBottomRight(
+  crop: CropRect, delta: Pick<CropRect, 'x' | 'y'>, bounds: CropBounds, preset: AspectRatioPreset,
+): CropRect {
+  const target = resizeRectangularCropFromBottomRight(crop, delta, bounds, preset)
+  if (!bounds.angle || cropIsInside(target, bounds)) return target
+  let low = 0, high = 1
+  const between = (t: number): CropRect => ({ ...crop,
+    width: crop.width + (target.width - crop.width) * t,
+    height: crop.height + (target.height - crop.height) * t })
+  for (let i = 0; i < 40; i++) {
+    const mid = (low + high) / 2
+    if (cropIsInside(between(mid), bounds)) low = mid
+    else high = mid
+  }
+  return between(low)
+}
+
 /** Translates a final-display crop by a pixel delta and keeps it constrained. */
 export function translateCrop(
   crop: CropRect,
   delta: Pick<CropRect, 'x' | 'y'>,
-  displaySize: Size,
+  displaySize: CropBounds,
   preset: AspectRatioPreset,
 ): CropRect {
   return constrainCrop(
@@ -289,27 +340,42 @@ function getDisplaySize(sourceSize: Size, rotation: Rotation): Size {
     : sourceSize
 }
 
-/** Minimum centered scale that keeps the entire display rectangle covered. */
-export function calculateStraightening(displaySize: Size, degrees = 0): ImageGeometry['straightening'] {
+/** Straightening preserves source scale; the display expands to show every pixel. */
+export function calculateStraightening(_displaySize: Size, degrees = 0): ImageGeometry['straightening'] {
   if (!Number.isFinite(degrees) || Math.abs(degrees) > 45) {
     throw new Error('Straightening must be between -45 and 45 degrees.')
   }
-  const radians = degrees * Math.PI / 180
-  const cosine = Math.cos(radians)
-  const sine = Math.abs(Math.sin(radians))
+  return { degrees, scale: 1 }
+}
+
+function getCropBounds(sourceSize: Size, state: ImageEditState): CropBounds {
+  const imageSize = getDisplaySize(sourceSize, state.rotation)
+  const { degrees } = calculateStraightening(imageSize, state.straighten)
+  if (degrees === 0) return imageSize
+  const c = Math.cos(degrees * Math.PI / 180), s = Math.abs(Math.sin(degrees * Math.PI / 180))
   return {
-    degrees,
-    scale: Math.max(
-      cosine + displaySize.height / displaySize.width * sine,
-      cosine + displaySize.width / displaySize.height * sine,
-    ),
+    width: Math.ceil(imageSize.width * c + imageSize.height * s),
+    height: Math.ceil(imageSize.height * c + imageSize.width * s),
+    imageSize,
+    angle: degrees * (state.flipHorizontal !== state.flipVertical ? -1 : 1),
   }
+}
+
+/** Keep the crop centered in the new frame, then fit it to the actual image. */
+export function straightenEditState(sourceSize: Size, state: ImageEditState, degrees: number): ImageEditState {
+  const before = calculateImageGeometry(sourceSize, state)
+  const bounds = getCropBounds(sourceSize, { ...state, straighten: degrees })
+  const crop = constrainCrop({ ...before.crop,
+    x: before.crop.x + (bounds.width - before.displaySize.width) / 2,
+    y: before.crop.y + (bounds.height - before.displaySize.height) / 2,
+  }, bounds, state.aspectRatio)
+  return { ...state, straighten: degrees, crop, zoom: 1, panX: 0, panY: 0 }
 }
 
 function mapDisplayedPointToSource(
   sourceSize: Size,
   rotation: Rotation,
-  displaySize: Size,
+  displaySize: CropBounds,
   point: Point,
   flipHorizontal: boolean,
   flipVertical: boolean,
@@ -325,8 +391,8 @@ function mapDisplayedPointToSource(
     const x = (unflippedPoint.x - displaySize.width / 2) / straightening.scale
     const y = (unflippedPoint.y - displaySize.height / 2) / straightening.scale
     unflippedPoint = {
-      x: x * Math.cos(radians) - y * Math.sin(radians) + displaySize.width / 2,
-      y: x * Math.sin(radians) + y * Math.cos(radians) + displaySize.height / 2,
+      x: x * Math.cos(radians) - y * Math.sin(radians) + (displaySize.imageSize ?? displaySize).width / 2,
+      y: x * Math.sin(radians) + y * Math.cos(radians) + (displaySize.imageSize ?? displaySize).height / 2,
     }
   }
 
@@ -348,7 +414,7 @@ function mapDisplayedPointToSource(
 function mapCropToSource(
   sourceSize: Size,
   rotation: Rotation,
-  displaySize: Size,
+  displaySize: CropBounds,
   crop: CropRect,
   flipHorizontal: boolean,
   flipVertical: boolean,
@@ -398,7 +464,7 @@ function getNextRotation(rotation: Rotation, degrees: 90 | -90): Rotation {
 
 function rotateCrop(
   crop: CropRect,
-  displaySize: Size,
+  displaySize: CropBounds,
   degrees: 90 | -90,
 ): CropRect {
   return degrees === 90
@@ -428,8 +494,8 @@ export function rotateEditState(
 ): ImageEditState {
   const currentGeometry = calculateImageGeometry(sourceSize, state)
   const nextRotation = getNextRotation(state.rotation, degrees)
-  const currentDisplaySize = getDisplaySize(sourceSize, state.rotation)
-  const nextDisplaySize = getDisplaySize(sourceSize, nextRotation)
+  const currentDisplaySize = currentGeometry.displaySize
+  const nextDisplaySize = getCropBounds(sourceSize, { ...state, rotation: nextRotation })
   const nextCrop = rotateCrop(currentGeometry.crop, currentDisplaySize, degrees)
 
   return {
@@ -443,16 +509,16 @@ export function rotateEditState(
 }
 
 export function calculateImageGeometry(sourceSize: Size, state: ImageEditState): ImageGeometry {
-  const displaySize = getDisplaySize(sourceSize, state.rotation)
+  const displaySize = getCropBounds(sourceSize, state)
   const straightening = calculateStraightening(displaySize, state.straighten)
   const constrainedCrop = constrainCrop(state.crop, displaySize, state.aspectRatio)
-  const crop = applyZoomAndPan(
+  const crop = constrainCrop(applyZoomAndPan(
     constrainedCrop,
     displaySize,
     state.zoom,
     state.panX,
     state.panY,
-  )
+  ), displaySize, state.aspectRatio)
   const croppedSize = { width: crop.width, height: crop.height }
 
   return {
