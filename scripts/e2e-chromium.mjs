@@ -907,8 +907,6 @@ async function captureToolLayout(cdp, sessionId) {
       comparisonDivider: describe('.comparison-divider'),
       comparisonVerify: describe('.verify-output-button'),
       comparisonSplit: describe('#comparison-split'),
-      comparisonMode: [...document.querySelectorAll('.comparison-mode-button')]
-        .find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? '',
       previewLabel: describe('.stage-preview-label'),
       previewLabelText: document.querySelector('.stage-preview-label')?.textContent?.trim() ?? '',
       processedPreview: describeProcessedPreview(document.querySelector('.processed-preview')),
@@ -2018,26 +2016,40 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(edgePixels.transparent===0,'Edge crop includes empty space.')
   await captureScreenshot(cdp,sessionId,'editor-edge-crop.png')
   await selectEditorView(cdp,sessionId,'compare')
-  await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="compare"]').click()`)
-  await setControlValue(cdp,sessionId,'#comparison-split',35)
+  assert(await evaluate(cdp,sessionId,`!document.querySelector('.comparison-controls, .comparison-inspection-controls, [data-comparison-mode]')`),'Obsolete comparison controls remain.')
+  const comparisonBounds = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('#comparison-split').getBoundingClientRect();return {x:r.x,y:r.y+r.height/2,width:r.width}})()`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:comparisonBounds.x+comparisonBounds.width*0.7,y:comparisonBounds.y,button:'left',clickCount:1},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector('#comparison-split').value==='70'`,'comparison image click')
+  for (const [fraction, expected] of [[1.1,100],[-0.1,0],[0.35,35]]) {
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:comparisonBounds.x+comparisonBounds.width*fraction,y:comparisonBounds.y,button:'left',buttons:1},sessionId)
+    await waitForDom(cdp,sessionId,`document.querySelector('#comparison-split').value==='${expected}'`,'comparison drag and edge clamping')
+  }
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:comparisonBounds.x+comparisonBounds.width*0.35,y:comparisonBounds.y,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:comparisonBounds.x+comparisonBounds.width*0.6,y:comparisonBounds.y},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('#comparison-split').value==='35'`),'Comparison kept dragging after release.')
   const comparison=await evaluate(cdp,sessionId,`(()=>{const v=document.querySelector('.comparison-viewport').getBoundingClientRect(),r=document.querySelector('.processed-preview').getBoundingClientRect();return {width:v.width,height:v.height,aligned:Math.abs(v.width-r.width)<1&&Math.abs(v.height-r.height)<1,clip:document.querySelector('.comparison-original-layer').style.clipPath,hidden:document.querySelector('.stage-area').hidden}})()`)
   assert(comparison.aligned && comparison.width>0 && comparison.height>0 && comparison.hidden && comparison.clip.includes('65%'),'Single-stage comparison is misaligned.')
-  await clickButton(cdp,sessionId,'100%表示')
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-canvas').getBoundingClientRect().width === document.querySelector('.processed-preview').naturalWidth`),'Actual-pixel comparison has wrong scale.')
-  await clickButton(cdp,sessionId,'全体表示')
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector('#comparison-split').value==='36'`,'keyboard comparison boundary')
   await captureScreenshot(cdp,sessionId,'editor-comparison.png')
   for(const viewport of [MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375}]) {
     await setViewport(cdp,sessionId,viewport)
     const fit=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.comparison-viewport').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right}})()`)
     assert(fit.width>0 && fit.height>=60 && fit.bottom<=viewport.height && fit.right<=viewport.width, 'Comparison image must fit small windows: '+JSON.stringify(fit))
+    await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+    const touch = {x:fit.x+fit.width*0.25,y:fit.y+fit.height/2}
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch]},sessionId)
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...touch,x:fit.x+fit.width*0.65}]},sessionId)
+    await waitForDom(cdp,sessionId,`document.querySelector('#comparison-split').value==='65'`,'touch comparison drag')
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]},sessionId)
+    assert(await evaluate(cdp,sessionId,`document.querySelector('#comparison-split').value==='65'`),'Cancel changed the comparison boundary.')
+    await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
     await captureScreenshot(cdp,sessionId,`editor-compare-${viewport.width}.png`)
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
-  for(const mode of ['original','result','compare']) {
-    await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="${mode}"]').click()`)
-    await setControlValue(cdp,sessionId,'#composition-guide','golden')
-    assert(await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="${mode}"]').getAttribute('aria-pressed')==='true'`),'Comparison selection was not persistent.')
-  }
+  await setControlValue(cdp,sessionId,'#composition-guide','golden')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('#comparison-split').value==='65'`),'Comparison boundary was not persistent.')
 
   await setControlValue(cdp,sessionId,'#output-format','image/jpeg')
   await setControlValue(cdp,sessionId,'#quality','0.57')
@@ -2129,14 +2141,17 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForFullOutput(cdp,sessionId)
   assert(await evaluate(cdp,sessionId,`document.querySelector('.processed-preview').naturalWidth===1 && document.querySelector('.processed-preview').naturalHeight===1`),'Tiny crop did not produce a 1px result.')
 
-  // Transparent output must cover the original layer with a checker/base in result mode.
+  // At the result endpoint, transparency must show the checker/base, not the original.
   const transparentPng=await evaluate(cdp,sessionId,`(()=>{const c=document.createElement('canvas');c.width=80;c.height=60;const x=c.getContext('2d');x.fillStyle='red';x.fillRect(0,0,40,60);return c.toDataURL().split(',')[1]})()`)
   const transparentPath=join(dirname(cropDragFixturePath),'transparent.png')
   await writeFile(transparentPath,Buffer.from(transparentPng,'base64'))
   await setFileInput(cdp,sessionId,transparentPath)
   await waitForFullOutput(cdp,sessionId)
   await selectEditorView(cdp,sessionId,'compare')
-  await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="result"]').click()`)
+  await evaluate(cdp,sessionId,`document.querySelector("#comparison-split").focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Home',code:'Home',windowsVirtualKeyCode:36},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Home',code:'Home',windowsVirtualKeyCode:36},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector("#comparison-split").value==='0'`,'result comparison endpoint')
   const transparent=await evaluate(cdp,sessionId,`(()=>{const img=document.querySelector('.processed-preview'),c=document.createElement('canvas');c.width=80;c.height=60;const x=c.getContext('2d');x.drawImage(img,0,0);const style=getComputedStyle(document.querySelector('.comparison-result-layer'));return {alpha:x.getImageData(70,30,1,1).data[3],checker:style.backgroundImage,background:style.backgroundColor,hidden:document.querySelector('.comparison-original-layer').getAttribute('aria-hidden')}})()`)
   assert(transparent.alpha===0 && transparent.checker!=='none' && transparent.background!=='rgba(0, 0, 0, 0)' && transparent.hidden==='true','Transparency leaked the original comparison layer.')
   await setControlValue(cdp,sessionId,'#output-format','image/webp')

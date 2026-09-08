@@ -38,6 +38,8 @@ File/drop
 
 算術の変更は geometry/scheduler/byte parser の focused unit test で説明する。Canvas、File、URL、Worker、CDP、download の変更は browser-effect boundary の E2E evidence まで必要である。
 
+比較は全体表示の重ね合わせに固定し、画像領域の Pointer capture 中の座標を画像幅に対する0〜100%へ制限して境界を操作する。キーボード操作は native range input に委ね、input 自体はポインターの対象から外してタッチ時の標準ドラッグとの競合を避ける。Chromium E2E でマウス・タッチ・キーボード操作と画像端への制限を確認する。
+
 ## State, cache, and stale requests
 
 full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中および出力設定パネルを閉じたときはタイマーを破棄する。すでに開始したfull処理は中断せず完了まで継続するため、その間の新しいpreviewは既存schedulerの契約どおり待機する。失敗時は自動ループを止めて再試行を提示する。容量バーはmetadata strip後のfull Blobと元Fileのbytesを共通スケールで表示し、容量増加も許容する。quickのbytesは保存容量として表示しない。

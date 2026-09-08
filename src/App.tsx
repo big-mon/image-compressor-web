@@ -69,8 +69,6 @@ interface SourceAsset {
 }
 
 type CropInteractionMode = 'move' | 'resize'
-type ComparisonMode = 'original' | 'compare' | 'result'
-type ComparisonInspection = 'fit' | 'actual'
 
 interface CropInteraction {
   readonly pointerId: number
@@ -118,9 +116,7 @@ function App() {
   const [candidatePending, setCandidatePending] = useState(false)
   const [previewPending, setPreviewPending] = useState(false)
   const [fullOutputPending, setFullOutputPending] = useState(false)
-  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('compare')
   const [comparisonSplit, setComparisonSplit] = useState(50)
-  const [comparisonInspection, setComparisonInspection] = useState<ComparisonInspection>('fit')
   const [exportPending, setExportPending] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [fileError, setFileError] = useState('')
@@ -137,6 +133,7 @@ function App() {
   const exportRequestIdRef = useRef(0)
   const exportActiveRef = useRef<{ requestId: number; intentGeneration: number } | undefined>(undefined)
   const currentIntentRef = useRef<ResultIntent | undefined>(undefined)
+  const comparisonInputRef = useRef<HTMLInputElement>(null)
   const cropSurfaceRef = useRef<HTMLDivElement | null>(null)
   const cropInteractionRef = useRef<CropInteraction | undefined>(undefined)
 
@@ -183,7 +180,6 @@ function App() {
     setRenderedIsPreview(true)
     setQuickPreviewResult(undefined)
     setFullOutputResult(undefined)
-    setComparisonInspection('fit')
   }
 
   const cancelExport = () => {
@@ -676,6 +672,19 @@ function App() {
     }))
   }
 
+  const moveComparisonBoundary = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (bounds.width > 0) {
+      setComparisonSplit(Math.round(Math.max(0, Math.min(100, (event.clientX - bounds.left) / bounds.width * 100))))
+    }
+  }
+
+  const endComparisonDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
   const download = async () => {
     if (!asset || !editState || !processorRef.current) {
       return
@@ -757,16 +766,6 @@ function App() {
     ? {
         aspectRatio: `${geometry.crop.width} / ${geometry.crop.height}`,
         maxWidth: `min(100%, calc(100cqh * ${geometry.crop.width / geometry.crop.height}))`,
-      }
-    : undefined
-  const actualInspectionAvailable = comparisonAvailable && !renderedIsPreview && fullOutputResult !== undefined && renderedResult !== undefined
-  const comparisonViewportStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual'
-    ? { width: '100%', height: '100%' }
-    : comparisonFrameStyle
-  const comparisonCanvasStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual' && renderedResult
-    ? {
-        width: `${renderedResult.width}px`,
-        height: `${renderedResult.height}px`,
       }
     : undefined
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
@@ -873,22 +872,31 @@ function App() {
                 </div>
 
               <section className="comparison-section" aria-label="仕上がりの比較" hidden={editorView !== 'compare'}>
-                  <div className={`comparison-card comparison-mode-${comparisonMode}`}>
+                  <div className="comparison-card">
                     <div className="comparison-stage"><div
-                      className={`comparison-viewport${actualInspectionAvailable && comparisonInspection === 'actual' ? ' is-actual' : ''}`}
-                      style={comparisonViewportStyle}
-                      tabIndex={0}
+                      className="comparison-viewport"
+                      style={comparisonFrameStyle}
                       aria-label="元画像と出力結果の比較表示"
                     >
-                      <div className={`comparison-canvas${actualInspectionAvailable && comparisonInspection === 'actual' ? ' is-actual' : ''}`} style={comparisonCanvasStyle}>
+                      <div
+                        className="comparison-canvas"
+                        onPointerDown={(event) => {
+                          if (!comparisonAvailable || !event.isPrimary || event.button !== 0) return
+                          event.preventDefault()
+                          comparisonInputRef.current?.focus()
+                          event.currentTarget.setPointerCapture(event.pointerId)
+                          moveComparisonBoundary(event)
+                        }}
+                        onPointerMove={(event) => {
+                          if (event.currentTarget.hasPointerCapture(event.pointerId)) moveComparisonBoundary(event)
+                        }}
+                        onPointerUp={endComparisonDrag}
+                        onPointerCancel={endComparisonDrag}
+                      >
                         <div
                           className="comparison-layer comparison-original-layer"
-                          style={comparisonMode === 'compare'
-                            ? { clipPath: `inset(0 ${100 - comparisonSplit}% 0 0)` }
-                            : comparisonMode === 'result'
-                              ? { visibility: 'hidden' }
-                              : undefined}
-                          aria-hidden={comparisonMode === 'result'}
+                          style={{ clipPath: `inset(0 ${100 - comparisonSplit}% 0 0)` }}
+                          aria-hidden={comparisonSplit === 0}
                         >
                           <div className="comparison-source-canvas" style={comparisonSourceCanvasStyle}>
                             <img
@@ -904,8 +912,7 @@ function App() {
 
                         <div
                           className="comparison-layer comparison-result-layer"
-                          style={comparisonMode === 'original' ? { visibility: 'hidden' } : undefined}
-                          aria-hidden={comparisonMode === 'original'}
+                          aria-hidden={comparisonSplit === 100}
                         >
                           {comparisonAvailable ? (
                             <img
@@ -926,7 +933,22 @@ function App() {
                           ) : null}
                         </div>
 
-                        {comparisonMode === 'compare' && comparisonAvailable ? (
+                        {comparisonAvailable ? (
+                          <input
+                            ref={comparisonInputRef}
+                            id="comparison-split"
+                            className="comparison-drag-control"
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={comparisonSplit}
+                            aria-label="比較の境界。画像上で左右にドラッグ、または矢印キーで調整"
+                            aria-valuetext={`元画像 ${comparisonSplit}%、出力結果 ${100 - comparisonSplit}%`}
+                            onChange={(event) => setComparisonSplit(Number(event.target.value))}
+                          />
+                        ) : null}
+                        {comparisonAvailable ? (
                           <div className="comparison-divider" style={{ left: `${comparisonSplit}%` }} aria-hidden="true" />
                         ) : null}
                         {!comparisonAvailable ? (
@@ -941,79 +963,7 @@ function App() {
                       </div>
                     </div>
 
-                    </div><div className="comparison-controls"><div className="comparison-mode-buttons" role="group" aria-label="比較表示モード">
-                      <button
-                        className={`comparison-mode-button${comparisonMode === 'original' ? ' is-selected' : ''}`}
-                        type="button"
-                        data-comparison-mode="original"
-                        aria-pressed={comparisonMode === 'original'}
-                        onClick={() => setComparisonMode('original')}
-                      >
-                        元画像
-                      </button>
-                      <button
-                        className={`comparison-mode-button${comparisonMode === 'compare' ? ' is-selected' : ''}`}
-                        type="button"
-                        data-comparison-mode="compare"
-                        aria-pressed={comparisonMode === 'compare'}
-                        onClick={() => setComparisonMode('compare')}
-                      >
-                        比較
-                      </button>
-                      <button
-                        className={`comparison-mode-button${comparisonMode === 'result' ? ' is-selected' : ''}`}
-                        type="button"
-                        data-comparison-mode="result"
-                        disabled={!comparisonAvailable}
-                        aria-pressed={comparisonMode === 'result'}
-                        onClick={() => setComparisonMode('result')}
-                      >
-                        出力結果
-                      </button>
                     </div>
-
-                    <div className="range-control comparison-split-control">
-                      <div className="range-label">
-                        <label htmlFor="comparison-split">比較の境界</label>
-                        <output htmlFor="comparison-split">{comparisonSplit}% 元画像</output>
-                      </div>
-                      <input
-                        id="comparison-split"
-                        type="range"
-                        min="0"
-                        max="100"
-                        step="1"
-                        value={comparisonSplit}
-                        disabled={!comparisonAvailable || comparisonMode !== 'compare'}
-                        aria-label="元画像と出力結果の比較境界。0は出力結果のみ、100は元画像のみ"
-                        onChange={(event) => setComparisonSplit(Number(event.target.value))}
-                      />
-                      <div className="comparison-endpoints" aria-hidden="true"><span>出力結果</span><span>元画像</span></div>
-                    </div>
-
-                    <div className="comparison-inspection-controls" role="group" aria-label="比較画像の表示倍率">
-                      <span className="field-label">表示</span>
-                      <button
-                        className={`comparison-inspection-button${comparisonInspection === 'fit' ? ' is-selected' : ''}`}
-                        type="button"
-                        aria-pressed={comparisonInspection === 'fit'}
-                        onClick={() => setComparisonInspection('fit')}
-                      >
-                        全体表示
-                      </button>
-                      <button
-                        className={`comparison-inspection-button${comparisonInspection === 'actual' ? ' is-selected' : ''}`}
-                        type="button"
-                        disabled={!actualInspectionAvailable}
-                        aria-pressed={comparisonInspection === 'actual'}
-                        onClick={() => setComparisonInspection('actual')}
-                      >
-                        100%表示
-                      </button>
-                      <span className="field-help">100%表示は保存用画像の1pxを画面の1pxで確認します。必要に応じてスクロールできます。</span>
-                    </div>
-
-                  </div>
                   </div>
 
               </section>
