@@ -1800,22 +1800,29 @@ async function selectEditorView(cdp, sessionId, view) {
 
 async function setOutputPanel(cdp, sessionId, open) {
   if (await evaluate(cdp, sessionId, `document.querySelector('.output-toggle')?.getAttribute('aria-expanded') !== '${open}'`)) {
-    await clickButton(cdp, sessionId, '出力設定')
+    const toggle = await evaluate(cdp, sessionId, `(()=>{const r=document.querySelector('.output-toggle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...toggle,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...toggle,button:'left',clickCount:1},sessionId)
   }
   await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === ${!open}`, 'output panel state')
 }
 
 async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   await setViewport(cdp, sessionId, viewport)
+  await setOutputPanel(cdp, sessionId, false)
+  const closedEditor = await evaluate(cdp,sessionId,`document.querySelector('.editor-column').getBoundingClientRect().toJSON()`)
   await setOutputPanel(cdp, sessionId, panelOpen)
   await selectEditorView(cdp, sessionId, 'edit')
   const layout = await evaluate(cdp, sessionId, `(() => {
     const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height, right:r.right, bottom:r.bottom } }
     return { root:rect('#root'), body:rect('body'), html:rect('html'), shell:rect('.editor-shell'), stage:rect('.stage-area'), surface:rect('.crop-surface'), bottom:rect('.editor-bottom'), panel:rect('#output-panel'), editor:rect('.editor-column'), header:rect('.tool-toolbar'),
       scrollHeight:document.documentElement.scrollHeight, scrollWidth:document.documentElement.scrollWidth,
-      fullscreen:document.fullscreenElement !== null, headings:document.querySelectorAll('.workspace h2').length,
+      fullscreen:document.fullscreenElement !== null, headings:document.querySelectorAll('.workspace h2:not(.output-menu-title)').length,
       footer:document.querySelector('footer') !== null,
-      buttons:[...document.querySelectorAll('.tool-toolbar button,.edit-modes button')].map(b=>({height:b.getBoundingClientRect().height,width:b.getBoundingClientRect().width})),
+      toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
+      headerToggle:document.querySelector('.tool-toolbar .output-toggle') !== null,
+      panelOnTop:(()=>{const p=document.querySelector('#output-panel'),r=p.getBoundingClientRect();return p.contains(document.elementFromPoint(r.x+r.width/2,r.y+20))})(),
+      buttons:[...document.querySelectorAll('.tool-toolbar button,.edit-modes button,.output-toggle')].map(b=>({height:b.getBoundingClientRect().height,width:b.getBoundingClientRect().width})),
     }
   })()`)
   const inside = r => r.x >= -1 && r.y >= -1 && r.right <= viewport.width + 1 && r.bottom <= viewport.height + 1
@@ -1826,10 +1833,15 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(layout.surface.width > 0 && layout.surface.height >= 80 && inside(layout.surface), `Image does not fit: ${JSON.stringify(layout)}`)
   assert(layout.surface.bottom <= layout.bottom.y && layout.stage.bottom <= layout.bottom.y + 1, 'Image overlaps the bottom controls.')
   assert(layout.buttons.every(b => b.height >= 44 && b.width >= 44), 'Primary buttons must have 44px tap targets.')
+  assert(!layout.headerToggle && layout.menuPosition==='fixed' && inside(layout.toggle), 'Output menu must be fixed outside the header.')
+  assert(viewport.width-layout.toggle.right <= 17 && viewport.height-layout.toggle.bottom <= 17,'Menu is not at the bottom right.')
+  assert(layout.editor.width===closedEditor.width && layout.editor.height===closedEditor.height,'Opening settings resized the image area.')
   if (panelOpen) {
-    assert(inside(layout.panel) && layout.panel.height > 0, 'Output panel must fit inside the workspace.')
-    assert(viewport.width < 768 ? layout.panel.y >= layout.editor.bottom - 1 : layout.panel.x >= layout.editor.right - 1, `Panel covers the image: ${JSON.stringify(layout)}`)
-    assert(layout.panel.bottom <= layout.bottom.y + 1, 'Output panel overlaps edit modes.')
+    assert(inside(layout.panel) && layout.panel.height > 0 && layout.panelOnTop, 'Output panel must be visible above the image.')
+    assert(layout.panel.x < layout.editor.right && layout.panel.y < layout.editor.bottom, 'Output panel must overlap the editor.')
+    assert(layout.panel.bottom < layout.toggle.y, 'Menu toggle must remain reachable below the panel.')
+    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel');p.scrollTop=p.scrollHeight;const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom;p.scrollTop=0;return visible})()`)
+    assert(scroll,'Output settings at the bottom are not reachable.')
   }
   return layout
 }
@@ -1931,7 +1943,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await setOutputPanel(cdp,sessionId,true)
-  await evaluate(cdp,sessionId, `document.querySelector('#output-panel .panel-close').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+  await evaluate(cdp,sessionId, `document.querySelector('#output-format').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
   await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && document.activeElement === document.querySelector('.output-toggle')`, 'Escape closes panel and restores focus')
   await setOutputPanel(cdp,sessionId,true)
 
@@ -2033,6 +2045,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39},sessionId)
   await waitForDom(cdp,sessionId,`document.querySelector('#comparison-split').value==='36'`,'keyboard comparison boundary')
   await captureScreenshot(cdp,sessionId,'editor-comparison.png')
+  await setOutputPanel(cdp,sessionId,false)
   for(const viewport of [MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375}]) {
     await setViewport(cdp,sessionId,viewport)
     const fit=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.comparison-viewport').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right}})()`)
@@ -2051,6 +2064,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await setControlValue(cdp,sessionId,'#composition-guide','golden')
   assert(await evaluate(cdp,sessionId,`document.querySelector('#comparison-split').value==='65'`),'Comparison boundary was not persistent.')
 
+  await setOutputPanel(cdp,sessionId,true)
   await setControlValue(cdp,sessionId,'#output-format','image/jpeg')
   await setControlValue(cdp,sessionId,'#quality','0.57')
   await waitForFullOutput(cdp,sessionId)

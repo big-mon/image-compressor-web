@@ -779,7 +779,7 @@ function App() {
 
   return (
     <>
-      <main className={asset ? `shell editor-shell${outputOpen ? ' output-open' : ''}` : 'shell'}>
+      <main className={asset ? 'shell editor-shell' : 'shell'}>
           <input
             id="image-input"
             className="visually-hidden"
@@ -811,7 +811,6 @@ function App() {
               </label>
             <button type="button" className="text-button" onClick={resetEdits}>リセット</button>
             <div className="toolbar-spacer" />
-            <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>出力設定</button>
             <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
           </>}
         </header>
@@ -974,8 +973,12 @@ function App() {
                 <span className="stage-preview-label">{editorView === 'edit' ? '元画像（切り抜き編集）' : renderedIsPreview ? 'クイック確認' : '保存用画像'}</span>
               </div>
             </div>
-            <aside id="output-panel" className="settings-column" aria-label="出力設定" hidden={!outputOpen} onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
-              <button type="button" className="text-button panel-close" onClick={() => { setOutputOpen(false); outputToggleRef.current?.focus() }}>閉じる</button>
+            <div className="output-menu" onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
+              <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-label={outputOpen ? '出力設定を最小化' : '出力設定を開く'} title={outputOpen ? '出力設定を最小化' : '出力設定を開く'} aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={outputOpen ? 'M5 12h14' : 'M4 6h16M4 12h16M4 18h16'} /></svg>
+              </button>
+            <aside id="output-panel" className="settings-column" aria-label="出力設定" hidden={!outputOpen}>
+              <h2 className="output-menu-title">出力設定</h2>
                 <div className="control-card output-card">
                   <label className="field-label" htmlFor="output-format">形式</label>
                   <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
@@ -1017,6 +1020,7 @@ function App() {
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
             </aside>
+            </div>
           </section>
           <div className="editor-bottom">
             <div className="mode-controls crop-controls" hidden={editorMode !== 'crop' || editorView !== 'edit'}>
