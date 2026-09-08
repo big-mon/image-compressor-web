@@ -375,14 +375,15 @@ function App() {
   }, [asset, editState, outputMime, quality, candidatePending, previewPending, exportPending, fullOutputPending, fullOutputResult])
 
   useEffect(() => {
-    if (!quickPreviewResult || processingError || candidatePending || previewPending || exportPending || fullOutputPending || fullOutputResult) {
+    // ponytail: started full encodes remain active; Worker restart is needed for preemption.
+    if (!outputOpen || !quickPreviewResult || processingError || candidatePending || previewPending || exportPending || fullOutputPending || fullOutputResult) {
       return
     }
     const timeout = window.setTimeout(() => {
       void confirmFullOutput()
     }, Math.max(0, 600 - (performance.now() - editChangedAtRef.current)))
     return () => window.clearTimeout(timeout)
-  }, [confirmFullOutput, quickPreviewResult, processingError, candidatePending, previewPending, exportPending, fullOutputPending, fullOutputResult])
+  }, [outputOpen, confirmFullOutput, quickPreviewResult, processingError, candidatePending, previewPending, exportPending, fullOutputPending, fullOutputResult])
 
   const handleFile = async (file: File | undefined) => {
     if (!file) {

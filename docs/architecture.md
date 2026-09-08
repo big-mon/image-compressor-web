@@ -20,7 +20,7 @@ File/drop
   → App の object URL、metrics、download
 ```
 
-`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、編集停止から600ms経過し quick preview が完了すると full output size を自動で要求する。失敗時の再試行と download も full output size を要求する。同じ編集 intent の確認済み full result があれば download はその Blob を再利用する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
+`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、出力設定パネルを開いている間に限り、編集停止から600ms経過し quick preview が完了すると full output size を自動で要求する。失敗時の再試行と download も full output size を要求する。同じ編集 intent の確認済み full result があれば download はその Blob を再利用する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
 
 ## Module contracts and seams
 
@@ -40,7 +40,7 @@ File/drop
 
 ## State, cache, and stale requests
 
-full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中はタイマーを破棄する。失敗時は自動ループを止めて再試行を提示する。容量バーはmetadata strip後のfull Blobと元Fileのbytesを共通スケールで表示し、容量増加も許容する。quickのbytesは保存容量として表示しない。
+full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中および出力設定パネルを閉じたときはタイマーを破棄する。すでに開始したfull処理は中断せず完了まで継続するため、その間の新しいpreviewは既存schedulerの契約どおり待機する。失敗時は自動ループを止めて再試行を提示する。容量バーはmetadata strip後のfull Blobと元Fileのbytesを共通スケールで表示し、容量増加も許容する。quickのbytesは保存容量として表示しない。
 
 1. File を受け取ると `App` は candidate として MIME を検査し、decode 完了を `fileLoadGeneration` で guard する。candidate の読み込み中・失敗時は committed source、編集、result URL、現行 preview の debounce/in-flight work を保持する。新しい選択は論理的に obsolete な export と candidate を無効化し、比較表示を解放する。
 2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。reset は candidate generation を進めて candidate を取り消し、committed source の編集だけを再処理する。
