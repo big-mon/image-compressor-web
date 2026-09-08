@@ -67,11 +67,13 @@ full出力の自動計算は既存のrequest id・intent guardで採用を制御
 絶対的な順序は次の通りである。
 
 1. normalized source pixels を Canvas に置く。
-2. `rotation` と `straighten` による中心回転で、画像全体を含む display canvas を作る。
-3. `flipHorizontal` / `flipVertical` を display canvas の最終軸で適用する。
+2. `rotation` と `straighten` による中心回転と画像全体の表示寸法を計算する。
+3. `flipHorizontal` / `flipVertical` を最終表示軸で適用する。
 4. final-display の `geometry.crop` を切り出す。
 5. `geometry.outputSize`（preview ならその比例縮小）へ resize する。
 6. requested MIME へ encode し、metadata を strip する。
+
+Workerはこの順序をCanvasの座標変換に合成し、normalized sourceから要求された出力サイズ（quickではpreviewサイズ）のCanvasへ直接描画する。傾き後の外接矩形全体や反転結果の中間Canvasは作らない。Canvasの確保は元画像サイズと出力サイズの2枚に限り、横長画像を45度傾けた場合も外接矩形の面積に比例するバッファを追加しない。`src/image/raster.worker.test.ts` でquick/fullの確保寸法を検査し、Chromium E2Eで12,000×1,000の画像を45度傾けたquick/full出力を確認する。
 
 `stage.ts` の CSS string は合成角度の `rotate(...)` を rightmost に置く。CSS transform は右から適用されるため、rotate が先、scaleX/scaleY が後となり、Worker の rotate-then-final-axis-flip と一致する。rotation、flip、crop、resize のどれかの順番を変えたら、geometry/stage unit と Chromium pixel evidence を同時に更新する。
 

@@ -1,4 +1,3 @@
-import { calculateImageGeometry } from './geometry'
 import { stripEncodedMetadata } from './encoded-metadata'
 import {
   createProcessingPlan,
@@ -78,95 +77,26 @@ function drawNormalizedSource(source: CachedSource): OffscreenCanvas {
   return canvas
 }
 
-function drawRotatedSource(
-  sourceCanvas: OffscreenCanvas,
-  request: WorkerProcessRequest,
-  renderScale: number,
-): OffscreenCanvas {
-  const geometry = calculateImageGeometry(
-    { width: sourceCanvas.width, height: sourceCanvas.height },
-    request.state,
-  )
-  const displayWidth = Math.max(1, Math.round(geometry.displaySize.width * renderScale))
-  const displayHeight = Math.max(1, Math.round(geometry.displaySize.height * renderScale))
-  const canvas = createCanvas(displayWidth, displayHeight)
-  const context = getContext(canvas)
-  const renderedSourceWidth = sourceCanvas.width * renderScale
-  const renderedSourceHeight = sourceCanvas.height * renderScale
-
-  context.save()
-  if (geometry.straightening.degrees !== 0) {
-    context.translate(displayWidth / 2, displayHeight / 2)
-    context.scale(geometry.straightening.scale, geometry.straightening.scale)
-    context.rotate((request.state.rotation + geometry.straightening.degrees) * Math.PI / 180)
-    context.translate(-renderedSourceWidth / 2, -renderedSourceHeight / 2)
-  } else switch (request.state.rotation) {
-    case 90:
-      context.translate(displayWidth, 0)
-      context.rotate(Math.PI / 2)
-      break
-    case 180:
-      context.translate(displayWidth, displayHeight)
-      context.rotate(Math.PI)
-      break
-    case 270:
-      context.translate(0, displayHeight)
-      context.rotate(-Math.PI / 2)
-      break
-  }
-  context.drawImage(sourceCanvas, 0, 0, renderedSourceWidth, renderedSourceHeight)
-  context.restore()
-
-  return canvas
-}
-
-function drawFinalOrientation(
-  rotatedCanvas: OffscreenCanvas,
-  request: WorkerProcessRequest,
-): OffscreenCanvas {
-  const canvas = createCanvas(rotatedCanvas.width, rotatedCanvas.height)
-  const context = getContext(canvas)
-
-  context.save()
-  if (request.state.flipHorizontal) {
-    context.translate(rotatedCanvas.width, 0)
-    context.scale(-1, 1)
-  }
-  if (request.state.flipVertical) {
-    context.translate(0, rotatedCanvas.height)
-    context.scale(1, -1)
-  }
-  context.drawImage(rotatedCanvas, 0, 0)
-  context.restore()
-
-  return canvas
-}
-
 async function render(request: WorkerProcessRequest, source: CachedSource): Promise<WorkerResultMessage> {
   const plan = createProcessingPlan(
     { width: source.width, height: source.height },
     request.state,
     request.output,
   )
-  const renderScale = plan.renderSize.width / plan.geometry.outputSize.width
   const sourceCanvas = drawNormalizedSource(source)
-  const rotatedCanvas = drawRotatedSource(sourceCanvas, request, renderScale)
-  const finalCanvas = drawFinalOrientation(rotatedCanvas, request)
   const outputCanvas = createCanvas(plan.renderSize.width, plan.renderSize.height)
   const outputContext = getContext(outputCanvas)
   outputContext.imageSmoothingEnabled = true
   outputContext.imageSmoothingQuality = 'high'
-  outputContext.drawImage(
-    finalCanvas,
-    plan.geometry.crop.x * renderScale,
-    plan.geometry.crop.y * renderScale,
-    plan.geometry.crop.width * renderScale,
-    plan.geometry.crop.height * renderScale,
-    0,
-    0,
-    plan.renderSize.width,
-    plan.renderSize.height,
-  )
+  const { crop, displaySize, straightening } = plan.geometry
+  // Map source pixels directly into the output crop. Never allocate the expanded
+  // bounding rectangle: a tilted panorama can make that rectangle enormous.
+  outputContext.scale(plan.renderSize.width / crop.width, plan.renderSize.height / crop.height)
+  outputContext.translate(displaySize.width / 2 - crop.x, displaySize.height / 2 - crop.y)
+  outputContext.scale(request.state.flipHorizontal ? -1 : 1, request.state.flipVertical ? -1 : 1)
+  outputContext.rotate((request.state.rotation + straightening.degrees) * Math.PI / 180)
+  outputContext.scale(straightening.scale, straightening.scale)
+  outputContext.drawImage(sourceCanvas, -source.width / 2, -source.height / 2)
 
   const blobOptions: ImageEncodeOptions = { type: request.output.mimeType }
   if (request.output.quality !== undefined) {
