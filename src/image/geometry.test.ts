@@ -8,6 +8,7 @@ import {
   createEditState,
   resizeCropFromBottomRight,
   rotateEditState,
+  straightenEditState,
   translateCrop,
   type ImageEditState,
 } from './geometry'
@@ -540,7 +541,7 @@ describe('straightening', () => {
     expect(() => calculateStraightening({ width: 400, height: 300 }, degrees)).toThrow(/Straightening/)
   })
 
-  it.each([{ width: 400, height: 300 }, { width: 300, height: 400 }, { width: 1000, height: 100 }])('covers every corner without changing the frame: %j', size => {
+  it.each([{ width: 400, height: 300 }, { width: 300, height: 400 }, { width: 1000, height: 100 }])('shows the complete image and constrains crops to its rotated edges: %j', size => {
     for (const rotation of [0, 90, 180, 270] as const) {
       for (const straighten of [-45, -17.3, 0, 17.3, 45]) {
         for (const flipHorizontal of [false, true]) {
@@ -549,8 +550,13 @@ describe('straightening', () => {
               crop: { x: 0, y: 0, width: 10000, height: 10000 } }
             const geometry = calculateImageGeometry(size, state)
             const zero = calculateImageGeometry(size, { ...state, straighten: 0 })
-            expect(geometry.crop).toEqual(zero.crop)
-            expect(geometry.outputSize).toEqual(zero.outputSize)
+            expect(geometry.straightening.scale).toBe(1)
+            if (straighten === 0) expect(geometry.crop).toEqual(zero.crop)
+            const w = rotation % 180 ? size.height : size.width
+            const h = rotation % 180 ? size.width : size.height
+            const angle = straighten * Math.PI / 180
+            expect(geometry.displaySize.width).toBe(Math.ceil(w * Math.cos(angle) + h * Math.abs(Math.sin(angle))))
+            expect(geometry.displaySize.height).toBe(Math.ceil(h * Math.cos(angle) + w * Math.abs(Math.sin(angle))))
             // Bounding all four inverse-mapped corners also bounds every interior point.
             expect(geometry.sourceCrop.x).toBeGreaterThanOrEqual(-1e-9)
             expect(geometry.sourceCrop.y).toBeGreaterThanOrEqual(-1e-9)
@@ -564,14 +570,81 @@ describe('straightening', () => {
     }
   })
 
+  it('allows a small crop beyond the old frame and stops at the actual image edge', () => {
+    const size = { width: 400, height: 300 }
+    const state = straightenEditState(size, createEditState(size), 30)
+    const bounds = calculateImageGeometry(size, state).displaySize
+    const small = constrainCrop({ x: bounds.width / 2, y: bounds.height / 2, width: 20, height: 20 }, bounds, 'free')
+    const moved = translateCrop(small, { x: 1000, y: 0 }, bounds, 'free')
+    expect(moved.x + moved.width).toBeGreaterThan((bounds.width + size.width) / 2)
+    expect(moved.width).toBeCloseTo(20)
+    const mapped = calculateImageGeometry(size, { ...state, crop: moved, aspectRatio: 'free' }).sourceCrop
+    expect(mapped.x + mapped.width).toBeCloseTo(size.width)
+    const resized = resizeCropFromBottomRight(small, { x: 1000, y: 1000 }, bounds, '1:1')
+    expect(resized.x).toBe(small.x)
+    expect(resized.y).toBe(small.y)
+    expect(resized.width).toBeCloseTo(resized.height)
+    expect(constrainCrop(resized, bounds, 'free')).toEqual(expect.objectContaining({
+      x: expect.closeTo(resized.x), y: expect.closeTo(resized.y), width: expect.closeTo(resized.width),
+    }))
+  })
+
+  it('keeps moved, resized and panned crops inside every rotated and flipped image', () => {
+    for (const size of [{ width: 400, height: 300 }, { width: 100, height: 1000 }]) {
+      for (const rotation of [0, 90, 180, 270] as const) {
+        for (const straighten of [-45, -17.3, 17.3, 45]) {
+          for (const flipHorizontal of [false, true]) {
+            for (const flipVertical of [false, true]) {
+              const state = { ...createEditState(size), rotation, straighten, flipHorizontal, flipVertical, aspectRatio: 'free' as const }
+              const bounds = calculateImageGeometry(size, state).displaySize
+              const crop = constrainCrop({ x: bounds.width / 2, y: bounds.height / 2, width: 20, height: 20 }, bounds, 'free')
+              for (const x of [-10000, 10000]) for (const y of [-10000, 10000]) {
+                const moved = translateCrop(crop, { x, y }, bounds, 'free')
+                const resized = resizeCropFromBottomRight(moved, { x: 100, y: 80 }, bounds, 'free')
+                expect(resized.x).toBe(moved.x)
+                expect(resized.y).toBe(moved.y)
+                for (const result of [
+                  calculateImageGeometry(size, { ...state, crop: moved }),
+                  calculateImageGeometry(size, { ...state, crop: resized }),
+                  calculateImageGeometry(size, { ...state, crop, zoom: 2, panX: Math.sign(x), panY: Math.sign(y) }),
+                ]) {
+                  expect(result.sourceCrop.x).toBeGreaterThanOrEqual(-1e-7)
+                  expect(result.sourceCrop.y).toBeGreaterThanOrEqual(-1e-7)
+                  expect(result.sourceCrop.x + result.sourceCrop.width).toBeLessThanOrEqual(size.width + 1e-7)
+                  expect(result.sourceCrop.y + result.sourceCrop.height).toBeLessThanOrEqual(size.height + 1e-7)
+                }
+                expect(moved.width).toBeCloseTo(crop.width)
+                expect(moved.height).toBeCloseTo(crop.height)
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('keeps the original preset ratio and centers a small crop as the frame changes', () => {
+    const size = { width: 400, height: 300 }
+    const initial = { ...createEditState(size), crop: { x: 180, y: 135, width: 40, height: 30 } }
+    for (const angle of [-45, 0, 45]) {
+      const state = straightenEditState(size, initial, angle)
+      const geometry = calculateImageGeometry(size, state)
+      expect(geometry.crop.width / geometry.crop.height).toBeCloseTo(4 / 3)
+      expect(geometry.crop.x + geometry.crop.width / 2).toBeCloseTo(geometry.displaySize.width / 2)
+      expect(geometry.crop.y + geometry.crop.height / 2).toBeCloseTo(geometry.displaySize.height / 2)
+      expect(geometry.outputSize).toEqual({ width: 40, height: 30 })
+    }
+  })
+
   it('inverts a non-centered crop through scale, angle and final-axis flip', () => {
     const size = { width: 400, height: 300 }
     const state = { ...createEditState(size), straighten: 30, flipHorizontal: true, aspectRatio: 'free' as const, crop: { x: 240, y: 50, width: 40, height: 60 } }
     const geometry = calculateImageGeometry(size, state)
     const radians = -Math.PI / 6
-    const points = ([[240, 50], [280, 50], [240, 110], [280, 110]] as const).map(([x, y]) => {
-      const dx = (400 - x - 200) / geometry.straightening.scale
-      const dy = (y - 150) / geometry.straightening.scale
+    const { x, y, width, height } = geometry.crop
+    const points = ([[x, y], [x + width, y], [x, y + height], [x + width, y + height]] as const).map(([x, y]) => {
+      const dx = geometry.displaySize.width / 2 - x
+      const dy = y - geometry.displaySize.height / 2
       return { x: 200 + dx * Math.cos(radians) - dy * Math.sin(radians), y: 150 + dx * Math.sin(radians) + dy * Math.cos(radians) }
     })
     expect(geometry.sourceCrop.x).toBeCloseTo(Math.min(...points.map(p => p.x)))

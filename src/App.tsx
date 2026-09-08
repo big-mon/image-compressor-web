@@ -8,10 +8,12 @@ import {
   createEditState,
   resizeCropFromBottomRight,
   rotateEditState,
+  straightenEditState,
   translateCrop,
   type AspectRatioPreset,
   type CropRect,
   type ImageEditState,
+  type CropBounds,
   type Size,
 } from './image/geometry'
 import {
@@ -76,7 +78,7 @@ interface CropInteraction {
   readonly startX: number
   readonly startY: number
   readonly startEffectiveCrop: CropRect
-  readonly displaySize: Size
+  readonly displaySize: CropBounds
 }
 
 function formatBytes(bytes: number): string {
@@ -1071,7 +1073,7 @@ function App() {
               <div className="aspect-presets" role="group" aria-label="アスペクト比">
                 {ASPECT_OPTIONS.map(option => {
                   const [width = 1, height = 1] = option.value.split(':').map(Number)
-                  const ratio = option.value === 'original' ? geometry.displaySize.width / geometry.displaySize.height : option.value === 'free' ? 4 / 3 : width / height
+                  const ratio = option.value === 'original' ? (geometry.displaySize.imageSize ?? geometry.displaySize).width / (geometry.displaySize.imageSize ?? geometry.displaySize).height : option.value === 'free' ? 4 / 3 : width / height
                   return (
                     <button key={option.value} type="button" className="aspect-preset" data-aspect-ratio={option.value} aria-label={`アスペクト比 ${option.label}`} aria-pressed={editState.aspectRatio === option.value} onClick={() => setAspectRatio(option.value)}>
                       <span className="aspect-icon-box" aria-hidden="true"><span className={`aspect-icon${option.value === 'free' ? ' is-free' : ''}`} style={{ width: `${24 * Math.min(ratio, 1)}px`, height: `${24 / Math.max(ratio, 1)}px` }} /></span>
@@ -1130,14 +1132,14 @@ function App() {
             <div className="mode-controls transform-controls" hidden={editorMode !== 'transform' || editorView !== 'edit'}>
               <div className="straighten-control range-control">
                 <div className="range-label"><label htmlFor="straighten">傾き</label><output htmlFor="straighten">{(editState.straighten ?? 0).toFixed(1)}°</output></div>
-                <input id="straighten" type="range" min="-45" max="45" step="0.1" value={editState.straighten ?? 0} onChange={event => updateEditState(current => ({ ...current, straighten: Number(event.target.value) }))} />
+                <input id="straighten" type="range" min="-45" max="45" step="0.1" value={editState.straighten ?? 0} onChange={event => updateEditState(current => straightenEditState(asset.pixels, current, Number(event.target.value)))} />
               </div>
               <div className="transform-buttons">
                 <button type="button" className="secondary-button icon-button" aria-label="左へ90°回転" title="左へ90°回転" onClick={() => rotateBy(-90)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 1 1 0 6M3 3v6h6" /><path d="M9 12h6v6H9z" /></svg></button>
                 <button type="button" className="secondary-button icon-button" aria-label="右へ90°回転" title="右へ90°回転" onClick={() => rotateBy(90)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 9a9 9 0 1 0 0 6M21 3v6h-6" /><path d="M9 12h6v6H9z" /></svg></button>
                 <button type="button" aria-label="左右反転" title="左右反転" aria-pressed={editState.flipHorizontal} className={`secondary-button icon-button${editState.flipHorizontal ? ' is-selected' : ''}`} onClick={() => updateEditState(current => ({ ...current, flipHorizontal: !current.flipHorizontal }))}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20" strokeDasharray="2 2" /><path d="M8 5v14H2zM16 5v14h6z" /></svg></button>
                 <button type="button" aria-label="上下反転" title="上下反転" aria-pressed={editState.flipVertical} className={`secondary-button icon-button${editState.flipVertical ? ' is-selected' : ''}`} onClick={() => updateEditState(current => ({ ...current, flipVertical: !current.flipVertical }))}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h20" strokeDasharray="2 2" /><path d="M5 8h14V2zM5 16h14v6z" /></svg></button>
-                <button type="button" className="secondary-button icon-button" aria-label="傾きを0°に戻す" title="傾きを0°に戻す" onClick={() => updateEditState(current => ({ ...current, straighten: 0 }))}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 1 1 0 6M3 3v6h6M8 12h8" /></svg></button>
+                <button type="button" className="secondary-button icon-button" aria-label="傾きを0°に戻す" title="傾きを0°に戻す" onClick={() => updateEditState(current => straightenEditState(asset.pixels, current, 0))}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 1 1 0 6M3 3v6h6M8 12h8" /></svg></button>
 
               </div>
             </div>

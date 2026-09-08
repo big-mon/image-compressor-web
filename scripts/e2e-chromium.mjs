@@ -1836,18 +1836,43 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   return layout
 }
 
+async function assertStraightenedStage(cdp, sessionId) {
+  const result = await evaluate(cdp, sessionId, `(() => {
+    const surface = document.querySelector('.crop-surface').getBoundingClientRect()
+    const image = document.querySelector('.stage-image')
+    const style = getComputedStyle(image), matrix = new DOMMatrix(style.transform)
+    const w = parseFloat(style.width), h = parseFloat(style.height)
+    const origin = {x:surface.width/2+w/2,y:surface.height/2+h/2}
+    const corners = [[0,0],[w,0],[0,h],[w,h]].map(([x,y]) => {
+      const p = matrix.transformPoint({x:x-w/2,y:y-h/2})
+      return {x:p.x+origin.x,y:p.y+origin.y}
+    })
+    const crop = document.querySelector('.crop-rectangle').getBoundingClientRect()
+    const inverse = matrix.inverse()
+    const cropCorners = [[crop.left,crop.top],[crop.right,crop.top],[crop.left,crop.bottom],[crop.right,crop.bottom]].map(([x,y]) => {
+      const p = inverse.transformPoint({x:x-surface.left-origin.x,y:y-surface.top-origin.y})
+      return {x:p.x+w/2,y:p.y+h/2}
+    })
+    return {corners,cropCorners,width:surface.width,height:surface.height,imageWidth:w,imageHeight:h}
+  })()`)
+  assert(result.corners.every(p => p.x >= -0.1 && p.y >= -0.1 && p.x <= result.width+0.1 && p.y <= result.height+0.1), 'Rotated image is clipped by the stage: '+JSON.stringify(result))
+  assert(result.cropCorners.every(p => p.x >= -0.1 && p.y >= -0.1 && p.x <= result.imageWidth+0.1 && p.y <= result.imageHeight+0.1), 'Crop extends beyond the actual image: '+JSON.stringify(result))
+}
+
 async function assertTransformedPixels(cdp, sessionId, { rotation, straighten, flipHorizontal, flipVertical }) {
   // Independent Canvas oracle: construct the transformed full frame, then crop/resize it.
   const result = await evaluate(cdp, sessionId, `(async () => {
     const source = document.querySelector('.stage-image'); await source.decode()
     const actual = document.querySelector('.processed-preview'); await actual.decode()
-    const w = ${rotation} % 180 ? source.naturalHeight : source.naturalWidth
-    const h = ${rotation} % 180 ? source.naturalWidth : source.naturalHeight
+    const iw = ${rotation} % 180 ? source.naturalHeight : source.naturalWidth
+    const ih = ${rotation} % 180 ? source.naturalWidth : source.naturalHeight
     const a = ${straighten} * Math.PI / 180
-    const s = Math.max((w*Math.cos(a)+h*Math.abs(Math.sin(a)))/w, (h*Math.cos(a)+w*Math.abs(Math.sin(a)))/h)
+    const w = Math.ceil(iw*Math.cos(a)+ih*Math.abs(Math.sin(a)))
+    const h = Math.ceil(ih*Math.cos(a)+iw*Math.abs(Math.sin(a)))
     const frame = document.createElement('canvas'); frame.width=w; frame.height=h
-    const ctx=frame.getContext('2d'); ctx.translate(w/2,h/2); ctx.scale(${flipHorizontal ? -1 : 1},${flipVertical ? -1 : 1}); ctx.rotate((${rotation}+${straighten})*Math.PI/180); ctx.scale(s,s); ctx.drawImage(source,-source.naturalWidth/2,-source.naturalHeight/2)
-    const values=[...document.querySelectorAll('.crop-coordinates input')].map(i=>Number(i.value))
+    const ctx=frame.getContext('2d'); ctx.translate(w/2,h/2); ctx.scale(${flipHorizontal ? -1 : 1},${flipVertical ? -1 : 1}); ctx.rotate((${rotation}+${straighten})*Math.PI/180); ctx.drawImage(source,-source.naturalWidth/2,-source.naturalHeight/2)
+    const crop=document.querySelector('.crop-rectangle').style
+    const values=[parseFloat(crop.left)*w/100,parseFloat(crop.top)*h/100,parseFloat(crop.width)*w/100,parseFloat(crop.height)*h/100]
     const expected=document.createElement('canvas'); expected.width=actual.naturalWidth; expected.height=actual.naturalHeight
     const ec=expected.getContext('2d'); ec.imageSmoothingQuality='high'; ec.drawImage(frame,...values,0,0,expected.width,expected.height)
     const output=document.createElement('canvas'); output.width=expected.width; output.height=expected.height
@@ -1939,6 +1964,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await setViewport(cdp,sessionId,viewport)
     const controls = await evaluate(cdp,sessionId,`(()=>{const slider=document.querySelector('.straighten-control').getBoundingClientRect(),icons=document.querySelector('.transform-buttons').getBoundingClientRect();return {sliderBottom:slider.bottom,iconsTop:icons.top,iconsBottom:icons.bottom,buttons:[...document.querySelectorAll('.transform-buttons button')].map(b=>({label:b.getAttribute('aria-label'),text:b.textContent.trim(),w:b.getBoundingClientRect().width,h:b.getBoundingClientRect().height})),cropVisible:document.querySelector('.crop-rectangle').getBoundingClientRect().height>0}})()`)
     assert(controls.iconsTop>=controls.sliderBottom && controls.iconsBottom<=viewport.height && controls.cropVisible && controls.buttons.every(b=>b.label && !b.text && b.w>=44 && b.h>=44),'Transform controls must be separate rows with accessible icons: '+JSON.stringify(controls))
+    await assertStraightenedStage(cdp,sessionId)
     await captureScreenshot(cdp,sessionId,`icon-controls-${viewport.width}.png`)
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
@@ -1957,15 +1983,16 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').getAttribute('aria-pressed')==='true' && document.querySelectorAll('.aspect-preset[aria-pressed="true"]').length===1 && document.querySelector('.crop-coordinates label:nth-child(3) input').value===document.querySelector('.crop-coordinates label:nth-child(4) input').value`, 'keyboard selection applies the square preset')
   await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
   await openDetails(cdp,sessionId,'.advanced-controls')
-  for(const [n,value] of [[2,400],[3,600],[0,40],[1,60]]) await setControlValue(cdp,sessionId,`.crop-coordinates label:nth-child(${n+1}) input`,value)
+  for(const [n,value] of [[2,100],[3,100],[0,500],[1,500]]) await setControlValue(cdp,sessionId,`.crop-coordinates label:nth-child(${n+1}) input`,value)
   await setControlValue(cdp,sessionId,'#resize-width','200')
   await waitForFullOutput(cdp,sessionId)
   pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true}))
   // Crop remains keyboard and pointer operable in the straightening mode.
   await clickButton(cdp,sessionId,'傾き・反転')
   await evaluate(cdp,sessionId,`document.querySelector('.advanced-controls').open=false`)
+  const keyboardBefore = await evaluate(cdp,sessionId,`Number(document.querySelector('.crop-coordinates input').value)`)
   await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`)
-  await waitForDom(cdp,sessionId,`document.querySelector('.crop-coordinates input').value==='41'`,'keyboard crop move')
+  await waitForDom(cdp,sessionId,`Number(document.querySelector('.crop-coordinates input').value)===${keyboardBefore + 1}`,'keyboard crop move')
   const cropBefore=await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates input').value`)
   const r=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-rectangle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...r,button:'left',clickCount:1},sessionId)
@@ -1980,7 +2007,16 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:handle.x-10,y:handle.y-10,button:'left',buttons:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:handle.x-10,y:handle.y-10,button:'left',clickCount:1},sessionId)
   assert(await evaluate(cdp,sessionId,`Number(document.querySelector('.crop-coordinates label:nth-child(3) input').value)<${beforeResize}`),'Crop resize must work in straightening mode.')
+  const edgeStart = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-rectangle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...edgeStart,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:edgeStart.x+1000,y:edgeStart.y,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:edgeStart.x+1000,y:edgeStart.y,button:'left',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').style;return (parseFloat(c.left)+parseFloat(c.width))*1132/100>(1132+600)/2})()`),'Crop cannot reach the image beyond the old fixed frame.')
+  await assertStraightenedStage(cdp,sessionId)
   await waitForFullOutput(cdp,sessionId)
+  const edgePixels = await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true})
+  assert(edgePixels.transparent===0,'Edge crop includes empty space.')
+  await captureScreenshot(cdp,sessionId,'editor-edge-crop.png')
   await selectEditorView(cdp,sessionId,'compare')
   await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="compare"]').click()`)
   await setControlValue(cdp,sessionId,'#comparison-split',35)
@@ -2110,7 +2146,26 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForFullOutput(cdp,sessionId)
   assert(await evaluate(cdp,sessionId,'window.__e2eBlobs.size===2 && window.__e2eRevoked.length>10'),'Source/rendered object URLs were not released on replacement.')
 
+  // A 12 MP panorama must render both quick and full crops without expanded canvases.
+  await setOutputPanel(cdp,sessionId,false)
+  const panoramaPng = await evaluate(cdp,sessionId,`(()=>{const c=document.createElement('canvas');c.width=12000;c.height=1000;const x=c.getContext('2d');x.fillStyle='rgb(60,120,180)';x.fillRect(0,0,c.width,c.height);return c.toDataURL().split(',')[1]})()`)
+  const panoramaPath = join(dirname(cropDragFixturePath),'panorama.png')
+  await writeFile(panoramaPath,Buffer.from(panoramaPng,'base64'))
+  await setFileInput(cdp,sessionId,panoramaPath)
+  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image')?.naturalWidth===12000 && document.querySelector('.processed-preview')?.dataset.previewKind==='quick' && !document.querySelector('.download-button').disabled`, 'panorama quick preview')
+  await setControlValue(cdp,sessionId,'#output-format','image/png')
+  await setControlValue(cdp,sessionId,'#resize-width','2048')
+  await clickButton(cdp,sessionId,'傾き・反転')
+  await setControlValue(cdp,sessionId,'#straighten','45')
+  await waitForDom(cdp,sessionId,`document.querySelector('.processed-preview')?.naturalWidth===960 && !document.querySelector('.download-button').disabled`, 'straightened panorama quick crop')
+  await setOutputPanel(cdp,sessionId,true)
+  await waitForFullOutput(cdp,sessionId)
+  const panorama = await evaluate(cdp,sessionId,`(async()=>{const img=document.querySelector('.processed-preview');await img.decode();const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;const x=c.getContext('2d');x.drawImage(img,0,0);const bytes=x.getImageData(0,0,c.width,c.height).data;let empty=0;for(let i=3;i<bytes.length;i+=4)if(bytes[i]===0)empty++;return {width:c.width,height:c.height,empty,center:[...x.getImageData(c.width/2,c.height/2,1,1).data]}})()`)
+  assert(panorama.width===2048 && panorama.height===171 && panorama.empty===0 && panorama.center.join(',')==='60,120,180,255', 'Panorama full crop failed: '+JSON.stringify(panorama))
+
   await setFileInput(cdp,sessionId,fixturePath)
+  await waitForFullOutput(cdp,sessionId)
+  await setControlValue(cdp,sessionId,'#output-format','image/jpeg')
   await waitForFullOutput(cdp,sessionId)
   const metadataBytes=await evaluate(cdp,sessionId,`(async()=>Array.from(new Uint8Array(await window.__e2eBlobs.get(document.querySelector('.processed-preview').src).arrayBuffer())))()`)
   const metadata=detectMetadataFamilies(Buffer.from(metadataBytes))
