@@ -1210,7 +1210,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   background: var(--panel);
 }
 .mode-controls { display: flex; align-items: center; justify-content: center; gap: 1rem; }
-.crop-controls .aspect-ratio-control { width: 10rem; }
+.crop-controls { flex-wrap: wrap; }
 .crop-controls .field-help { display: none; }
 .crop-controls .guide-control { margin: 0; }
 .crop-controls .guide-control select { min-height: 2.75rem; }
@@ -1230,7 +1230,8 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   border-radius: 1rem 1rem 0 0;
   background: var(--panel);
 }
-.straighten-control { width: min(22rem, 100%); }
+.transform-controls { flex-direction: column; gap: 0.35rem; }
+.straighten-control { width: min(28rem, 100%); }
 .transform-buttons { display: flex; gap: 0.5rem; }
 .edit-modes { display: flex; justify-content: center; gap: 1.5rem; margin-top: 0.5rem; }
 .edit-modes button { display: grid; justify-items: center; gap: 0.25rem; min-width: 6.5rem; font-size: 0.8rem; }
@@ -1261,7 +1262,7 @@ input[type="number"], select { background-color: #101010; }
   .editor-shell .stage-preview-label { display: none; }
   .editor-bottom { padding-inline: 0.5rem; }
   .mode-controls { gap: 0.5rem; }
-  .crop-controls { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; }
+  .crop-controls { display: flex; flex-wrap: wrap; }
   .crop-controls .aspect-ratio-control { width: auto; }
   .crop-controls .guide-control { display: grid; gap: 0.45rem; }
   .crop-controls .guide-control select { width: 100%; min-width: 0; }
@@ -1281,7 +1282,6 @@ input[type="number"], select { background-color: #101010; }
   .editor-bottom { padding-top: 0; }
   .edit-modes { margin: 0; }
   .edit-modes button { display: flex; align-items: center; }
-  .transform-controls { flex-direction: row; }
   .transform-buttons { flex-wrap: wrap; gap: 0.15rem; }
   .transform-buttons button { min-height: 2.75rem; padding: 0.1rem 0.3rem; }
   .editor-shell .crop-stage-meta { display: none; }
@@ -1306,10 +1306,28 @@ input[type="number"], select { background-color: #101010; }
   .crop-controls .aspect-ratio-control, .crop-controls .guide-control { gap: 0; }
   .comparison-split-control .range-label { display: none; }
   .comparison-stage { padding-block: 0.25rem; }
-  .straighten-control { display: flex; align-items: center; gap: 0.5rem; width: 45%; }
+  .straighten-control { display: flex; align-items: center; gap: 0.5rem; }
   .straighten-control input { min-width: 0; }
   .straighten-control .range-label { flex: none; gap: 0.25rem; }
 }
 @media (max-height: 500px) and (max-width: 767px) {
   .editor-shell.output-open .workspace { grid-template-rows: minmax(0, 1fr) minmax(0, 30%); }
+}
+
+.aspect-presets { display: flex; gap: 0.3rem; min-width: 0; max-width: 100%; overflow-x: auto; padding: 0.25rem; }
+.aspect-preset { display: grid; justify-items: center; align-content: center; gap: 0.25rem; flex: 0 0 3rem; min-height: 3.5rem; padding: 0.3rem; border: 1px solid transparent; border-radius: 0.5rem; background: transparent; color: var(--muted); font-size: 0.75rem; }
+.aspect-preset[aria-pressed="true"] { color: var(--mint); background: var(--mint-dark); border-color: var(--mint); }
+.aspect-icon-box { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; }
+.aspect-icon { border: 1.5px solid currentColor; border-radius: 2px; }
+.aspect-icon.is-free { border-style: dashed; }
+.transform-buttons .icon-button { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0.5rem; }
+.icon-button svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 767px) {
+  .aspect-presets { flex-basis: 100%; }
+  .crop-controls .guide-control { display: flex; }
+}
+@media (max-height: 500px) {
+  .crop-controls { flex-wrap: nowrap; }
+  .aspect-presets { flex: 1 1 0; }
+  .crop-controls .guide-control, .crop-controls .advanced-controls { flex: none; }
 }

@@ -1224,7 +1224,7 @@ async function runProcessorStartupFailureRegression({ allowedPaths, cdp, fixture
 async function clickButton(cdp, sessionId, text) {
   const quotedText = JSON.stringify(text)
   await evaluate(cdp, sessionId, `(() => {
-    const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes(${quotedText}))
+    const button = [...document.querySelectorAll('button')].find((candidate) => (candidate.getAttribute('aria-label') || candidate.textContent)?.includes(${quotedText}))
     if (!button) throw new Error('Button not found: ' + ${quotedText})
     if (button.disabled) throw new Error('Button is disabled: ' + button.textContent)
     button.click()
@@ -1935,14 +1935,28 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(pixels[1].transparent===0,'Extreme straightening introduced transparent corners.')
   await captureScreenshot(cdp,sessionId,'editor-straighten.png')
 
+  for (const viewport of [DESKTOP_VIEWPORT, MOBILE_VIEWPORT, {...MOBILE_VIEWPORT,width:667,height:375}]) {
+    await setViewport(cdp,sessionId,viewport)
+    const controls = await evaluate(cdp,sessionId,`(()=>{const slider=document.querySelector('.straighten-control').getBoundingClientRect(),icons=document.querySelector('.transform-buttons').getBoundingClientRect();return {sliderBottom:slider.bottom,iconsTop:icons.top,iconsBottom:icons.bottom,buttons:[...document.querySelectorAll('.transform-buttons button')].map(b=>({label:b.getAttribute('aria-label'),text:b.textContent.trim(),w:b.getBoundingClientRect().width,h:b.getBoundingClientRect().height})),cropVisible:document.querySelector('.crop-rectangle').getBoundingClientRect().height>0}})()`)
+    assert(controls.iconsTop>=controls.sliderBottom && controls.iconsBottom<=viewport.height && controls.cropVisible && controls.buttons.every(b=>b.label && !b.text && b.w>=44 && b.h>=44),'Transform controls must be separate rows with accessible icons: '+JSON.stringify(controls))
+    await captureScreenshot(cdp,sessionId,`icon-controls-${viewport.width}.png`)
+  }
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await clickButton(cdp,sessionId,'クロップ')
-  await setControlValue(cdp,sessionId,'#aspect-ratio','free')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('select#aspect-ratio')===null && document.querySelectorAll('.aspect-preset').length===9`),'Aspect ratios must be preset buttons.')
+  await waitForDom(cdp,sessionId,`document.querySelector('.crop-controls').hidden===false`, 'crop preset controls visible')
+  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').getAttribute('aria-pressed')==='true' && document.querySelectorAll('.aspect-preset[aria-pressed="true"]').length===1 && document.querySelector('.crop-coordinates label:nth-child(3) input').value===document.querySelector('.crop-coordinates label:nth-child(4) input').value`, 'keyboard selection applies the square preset')
+  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
   await openDetails(cdp,sessionId,'.advanced-controls')
   for(const [n,value] of [[2,400],[3,600],[0,40],[1,60]]) await setControlValue(cdp,sessionId,`.crop-coordinates label:nth-child(${n+1}) input`,value)
   await setControlValue(cdp,sessionId,'#resize-width','200')
   await waitForFullOutput(cdp,sessionId)
   pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true}))
-  // Close details before pointer interaction; the crop must remain keyboard and mouse operable.
+  // Crop remains keyboard and pointer operable in the straightening mode.
+  await clickButton(cdp,sessionId,'傾き・反転')
   await evaluate(cdp,sessionId,`document.querySelector('.advanced-controls').open=false`)
   await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`)
   await waitForDom(cdp,sessionId,`document.querySelector('.crop-coordinates input').value==='41'`,'keyboard crop move')
@@ -1954,6 +1968,13 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates input').value !== '${cropBefore}'`),'Pointer crop move did not update geometry.')
   await waitForFullOutput(cdp,sessionId)
 
+  const beforeResize=await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates label:nth-child(3) input').value`)
+  const handle=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-handle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...handle,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:handle.x-10,y:handle.y-10,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:handle.x-10,y:handle.y-10,button:'left',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`Number(document.querySelector('.crop-coordinates label:nth-child(3) input').value)<${beforeResize}`),'Crop resize must work in straightening mode.')
+  await waitForFullOutput(cdp,sessionId)
   await selectEditorView(cdp,sessionId,'compare')
   await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="compare"]').click()`)
   await setControlValue(cdp,sessionId,'#comparison-split',35)
@@ -2052,7 +2073,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await setFileInput(cdp,sessionId,cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
   await setControlValue(cdp,sessionId,'#output-format','image/png')
-  await setControlValue(cdp,sessionId,'#aspect-ratio','free')
+  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
   await setControlValue(cdp,sessionId,'#resize-width','1001')
   await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(3) input','7')
   await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(4) input','3')
