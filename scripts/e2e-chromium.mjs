@@ -1843,6 +1843,14 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
     const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel');p.scrollTop=p.scrollHeight;const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom;p.scrollTop=0;return visible})()`)
     assert(scroll,'Output settings at the bottom are not reachable.')
   }
+  if (!panelOpen) {
+    for (const mode of ['傾き・反転','クロップ']) {
+      const point = await evaluate(cdp,sessionId,`(()=>{const b=[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')),r=b.getBoundingClientRect();return {x:r.right-4,y:r.bottom-8}})()`)
+      await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
+      assert(await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')).getAttribute('aria-pressed')==='true' && document.querySelector('#output-panel').hidden`),'Floating toggle intercepted the edit-mode button: '+mode)
+    }
+  }
   return layout
 }
 
@@ -1935,7 +1943,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp, sessionId, `document.querySelector('.metrics-card .metric-line strong').textContent === '16 × 32 px'`), 'EXIF orientation was not normalized.')
   assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Output panel must start collapsed.')
   const layouts = []
-  for (const viewport of [DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
+  for (const viewport of [DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
     for(const open of [false,true]) {
       layouts.push(await assertEditorLayout(cdp,sessionId,viewport,open))
       await captureScreenshot(cdp,sessionId,`editor-${viewport.width}-${viewport.height}-${open?'output':'crop'}.png`)
