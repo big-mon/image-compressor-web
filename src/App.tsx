@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 import { isSameResultIntent, type ResultIntent } from './app-async'
@@ -102,6 +102,11 @@ function App() {
   const [editState, setEditState] = useState<ImageEditState | undefined>()
   const [outputMime, setOutputMime] = useState<OutputMime>('image/jpeg')
   const [quality, setQuality] = useState(0.82)
+  const [editorMode, setEditorMode] = useState<'crop' | 'transform'>('crop')
+  const [editorView, setEditorView] = useState<'edit' | 'compare'>('edit')
+  const [outputOpen, setOutputOpen] = useState(false)
+  const outputToggleRef = useRef<HTMLButtonElement>(null)
+  const editChangedAtRef = useRef(0)
   const [compositionGuide, setCompositionGuide] = useState<CompositionGuide>('thirds')
   const [renderedResult, setRenderedResult] = useState<RasterResult | undefined>()
   const [renderedUrl, setRenderedUrl] = useState('')
@@ -143,6 +148,7 @@ function App() {
     : undefined
 
   const invalidateResultIntent = () => {
+    editChangedAtRef.current = performance.now()
     resultIntentGenerationRef.current += 1
     previewRequestIdRef.current += 1
     fullOutputRequestIdRef.current += 1
@@ -315,7 +321,7 @@ function App() {
     return () => window.clearTimeout(timeoutId)
   }, [asset, editState, geometry, outputMime, processorError, processorReady, quality])
 
-  const confirmFullOutput = async () => {
+  const confirmFullOutput = useCallback(async () => {
     if (
       !asset ||
       !editState ||
@@ -366,7 +372,18 @@ function App() {
         setFullOutputPending(false)
       }
     }
-  }
+  }, [asset, editState, outputMime, quality, candidatePending, previewPending, exportPending, fullOutputPending, fullOutputResult])
+
+  useEffect(() => {
+    // ponytail: started full encodes remain active; Worker restart is needed for preemption.
+    if (!outputOpen || !quickPreviewResult || processingError || candidatePending || previewPending || exportPending || fullOutputPending || fullOutputResult) {
+      return
+    }
+    const timeout = window.setTimeout(() => {
+      void confirmFullOutput()
+    }, Math.max(0, 600 - (performance.now() - editChangedAtRef.current)))
+    return () => window.clearTimeout(timeout)
+  }, [outputOpen, confirmFullOutput, quickPreviewResult, processingError, candidatePending, previewPending, exportPending, fullOutputPending, fullOutputResult])
 
   const handleFile = async (file: File | undefined) => {
     if (!file) {
@@ -403,6 +420,8 @@ function App() {
       }
       sourceUrlRef.current = objectUrl
       setAsset({ file, pixels, objectUrl })
+      setEditorMode('crop')
+      setEditorView('edit')
       setEditState(createEditState({ width: pixels.width, height: pixels.height }))
       setCandidatePending(false)
       setFileError('')
@@ -723,7 +742,7 @@ function App() {
         top: '50%',
         width: `${asset.pixels.width / geometry.displaySize.width * 100}%`,
         height: `${asset.pixels.height / geometry.displaySize.height * 100}%`,
-        transform: createStageTransform(editState.rotation, editState.flipHorizontal, editState.flipVertical),
+        transform: createStageTransform(editState.rotation, editState.flipHorizontal, editState.flipVertical, geometry.straightening),
       }
     : undefined
   const cropSurfaceStyle: CSSProperties | undefined = geometry
@@ -735,12 +754,12 @@ function App() {
   const comparisonFrameStyle: CSSProperties | undefined = geometry
     ? {
         aspectRatio: `${geometry.crop.width} / ${geometry.crop.height}`,
-        maxWidth: `min(56rem, calc(38rem * ${geometry.crop.width / geometry.crop.height}))`,
+        maxWidth: `min(100%, calc(100cqh * ${geometry.crop.width / geometry.crop.height}))`,
       }
     : undefined
   const actualInspectionAvailable = comparisonAvailable && !renderedIsPreview && fullOutputResult !== undefined && renderedResult !== undefined
   const comparisonViewportStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual'
-    ? { height: 'min(38rem, 70vh)' }
+    ? { width: '100%', height: '100%' }
     : comparisonFrameStyle
   const comparisonCanvasStyle: CSSProperties | undefined = actualInspectionAvailable && comparisonInspection === 'actual' && renderedResult
     ? {
@@ -759,12 +778,7 @@ function App() {
 
   return (
     <>
-      <main className="shell">
-        <header className="tool-toolbar">
-          <div className="toolbar-copy">
-            <h1>画像を圧縮・編集</h1>
-            <p className="tool-reassurance">画像は外部に送信されません</p>
-          </div>
+      <main className={asset ? `shell editor-shell${outputOpen ? ' output-open' : ''}` : 'shell'}>
           <input
             id="image-input"
             className="visually-hidden"
@@ -774,27 +788,9 @@ function App() {
             aria-label="画像ファイルを選択"
             onChange={handleInputChange}
           />
-          <div className="toolbar-actions">
-            {asset ? (
-              <span className={`status-chip${busy ? ' is-busy' : ''}`} role="status" aria-live="polite">
-                {busy
-                  ? fileError
-                    ? 'エラー'
-                    : candidatePending
-                      ? '画像を読み込み中…'
-                      : fullOutputPending
-                        ? '保存用画像を確認中…'
-                      : previewPending
-                        ? '圧縮プレビューを更新中…'
-                        : '処理中…'
-                  : errorMessage
-                    ? 'エラー'
-                    : renderedResult
-                      ? 'プレビュー準備完了'
-                      : '画像を準備中'}
-              </span>
-            ) : null}
-            {asset ? (
+        <header className="tool-toolbar">
+          {!asset ? <div className="toolbar-copy"><h1>画像を圧縮・編集</h1><p className="tool-reassurance">画像は外部に送信されません</p></div> : <>
+            <h1 className="visually-hidden">画像を圧縮・編集</h1>
               <label
                 className={`change-image-button${dragging ? ' is-dragging' : ''}`}
                 htmlFor="image-input"
@@ -812,22 +808,20 @@ function App() {
               >
                 画像を変更
               </label>
-            ) : null}
-          </div>
+            <button type="button" className="text-button" onClick={resetEdits}>リセット</button>
+            <div className="toolbar-spacer" />
+            <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>出力設定</button>
+            <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
+          </>}
         </header>
-
-        {asset && editState && geometry ? (
-          <>
-            <section className="workspace" aria-label="画像エディター">
-              <div className="editor-column">
-                <div className="crop-editor-heading">
-                  <div>
-                    <p className="section-kicker">EDIT</p>
-                    <h2>切り抜き範囲</h2>
-                  </div>
-                  <p className="crop-guidance">枠内が残る範囲です。暗い外側は削除されます。</p>
-                </div>
-                <div className="stage-area" aria-label="画像編集ステージ">
+        {asset && editState && geometry ? <>
+          <section className="workspace" aria-label="画像エディター" data-quick-width={quickPreviewMetrics?.outputWidth} data-quick-height={quickPreviewMetrics?.outputHeight} data-quick-bytes={quickPreviewMetrics?.outputBytes}>
+            <div className="editor-column">
+              <div className="view-switch" role="group" aria-label="画像の表示">
+                <button type="button" aria-pressed={editorView === 'edit'} onClick={() => setEditorView('edit')}>編集</button>
+                <button type="button" aria-pressed={editorView === 'compare'} onClick={() => setEditorView('compare')}>比較</button>
+              </div>
+                <div className="stage-area" hidden={editorView !== 'edit'} aria-label="画像編集ステージ">
                   <div
                     ref={cropSurfaceRef}
                     className="crop-surface"
@@ -850,7 +844,7 @@ function App() {
                       <div className="crop-shade crop-shade-right" style={{ top: cropStyle?.top, width: geometry ? `${Math.max(0, geometry.displaySize.width - currentCrop.x - currentCrop.width) / geometry.displaySize.width * 100}%` : undefined, height: cropStyle?.height }} />
                     </div>
                     <div
-                      className="crop-rectangle"
+                      className="crop-rectangle" hidden={editorMode !== 'crop'}
                       style={cropStyle}
                       role="group"
                       tabIndex={0}
@@ -876,44 +870,9 @@ function App() {
                   </div>
                 </div>
 
-                <div className="crop-stage-meta" aria-live="polite">
-                  <span className="stage-preview-label">元画像（切り抜き編集）</span>
-                  <span className="crop-processing-status">
-                    {candidatePending
-                      ? '新しい画像を読み込み中…'
-                      : previewPending
-                        ? 'プレビュー更新中。切り抜きはそのまま操作できます。'
-                        : errorMessage
-                          ? '結果を更新できませんでした。元画像の編集は続けられます。'
-                          : '画像上の枠をドラッグして位置を調整できます。'}
-                  </span>
-                </div>
-
-                <div className="button-row editor-actions">
-                  <button type="button" className="secondary-button" onClick={() => rotateBy(-90)}>↺ 左へ90°</button>
-                  <button type="button" className="secondary-button" onClick={() => rotateBy(90)}>↻ 右へ90°</button>
-                  <button type="button" className={`secondary-button${editState.flipHorizontal ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipHorizontal: !current.flipHorizontal }))}>↔ 左右反転</button>
-                  <button type="button" className={`secondary-button${editState.flipVertical ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipVertical: !current.flipVertical }))}>↕ 上下反転</button>
-                  <button type="button" className="text-button" onClick={resetEdits}>編集をリセット</button>
-                  <div className="guide-control">
-                    <label htmlFor="composition-guide">構図補助線</label>
-                    <select id="composition-guide" value={compositionGuide} onChange={(event) => setCompositionGuide(event.target.value as CompositionGuide)}>
-                      {COMPOSITION_GUIDE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                  </div>
-                </div>
-
-                <section className="comparison-section" aria-labelledby="comparison-heading">
-                  <div className="section-heading comparison-heading">
-                    <div>
-                      <p className="section-kicker">COMPARE</p>
-                      <h2 id="comparison-heading">仕上がりを確認</h2>
-                    </div>
-                    <p className="comparison-guidance">元画像と結果を同じ切り抜き位置で見比べます。</p>
-                  </div>
-
+              <section className="comparison-section" aria-label="仕上がりの比較" hidden={editorView !== 'compare'}>
                   <div className={`comparison-card comparison-mode-${comparisonMode}`}>
-                    <div
+                    <div className="comparison-stage"><div
                       className={`comparison-viewport${actualInspectionAvailable && comparisonInspection === 'actual' ? ' is-actual' : ''}`}
                       style={comparisonViewportStyle}
                       tabIndex={0}
@@ -980,7 +939,7 @@ function App() {
                       </div>
                     </div>
 
-                    <div className="comparison-mode-buttons" role="group" aria-label="比較表示モード">
+                    </div><div className="comparison-controls"><div className="comparison-mode-buttons" role="group" aria-label="比較表示モード">
                       <button
                         className={`comparison-mode-button${comparisonMode === 'original' ? ' is-selected' : ''}`}
                         type="button"
@@ -1010,16 +969,6 @@ function App() {
                         出力結果
                       </button>
                     </div>
-
-                    {outputMime === 'image/png' ? (
-                      <p className="comparison-quality-note">PNGでは保存画質の設定はありません。</p>
-                    ) : (
-                      <div className="range-control comparison-quality-control">
-                        <div className="range-label"><label htmlFor="quality">保存画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
-                        <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} aria-describedby="quality-help" onChange={(event) => updateQuality(Number(event.target.value))} />
-                        <span id="quality-help" className="field-help">JPEG・WebPのエンコード設定。劣化率ではありません。</span>
-                      </div>
-                    )}
 
                     <div className="range-control comparison-split-control">
                       <div className="range-label">
@@ -1062,81 +1011,77 @@ function App() {
                       <span className="field-help">100%表示は保存用画像の1pxを画面の1pxで確認します。必要に応じてスクロールできます。</span>
                     </div>
 
-                    <div className="comparison-footer">
-                      <p className="comparison-status">
-                        {comparisonAvailable
-                          ? renderedIsPreview
-                            ? 'クイック確認：最大960pxに縮小した確認用です。容量もこの確認用画像の値です。'
-                            : '保存用画像：実際に保存される解像度・エンコード結果を確認しています。'
-                          : '結果がない間も、上の元画像で切り抜き範囲を操作できます。'}
-                      </p>
-                      <button
-                        className="verify-output-button"
-                        type="button"
-                        disabled={!processorReady || candidatePending || previewPending || exportPending || fullOutputPending || Boolean(fullOutputResult)}
-                        onClick={() => void confirmFullOutput()}
-                      >
-                        {fullOutputPending
-                          ? '保存サイズを確認中…'
-                          : fullOutputResult
-                            ? '保存サイズを確認済み'
-                            : '保存サイズを確認（フルサイズ）'}
-                      </button>
-                    </div>
                   </div>
-                </section>
-              </div>
+                  </div>
 
-              <aside className="settings-column" aria-label="出力設定">
-                <div className="section-heading compact-heading">
-                  <div>
-                    <p className="section-kicker">OUTPUT</p>
-                    <h2>保存設定</h2>
-                  </div>
-                </div>
+              </section>
+              <div className="crop-stage-meta" role="status" aria-live="polite">
+                <span className={`status-chip${busy ? ' is-busy' : ''}`}>
+                  {fileError ? 'エラー' : candidatePending ? '画像を読み込み中…' : previewPending ? '圧縮プレビューを更新中…' : fullOutputPending ? '保存用画像を確認中…' : exportPending ? '保存中…' : errorMessage ? 'エラー' : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
+                </span>
+                <span className="stage-preview-label">{editorView === 'edit' ? '元画像（切り抜き編集）' : renderedIsPreview ? 'クイック確認' : '保存用画像'}</span>
+              </div>
+            </div>
+            <aside id="output-panel" className="settings-column" aria-label="出力設定" hidden={!outputOpen} onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
+              <button type="button" className="text-button panel-close" onClick={() => { setOutputOpen(false); outputToggleRef.current?.focus() }}>閉じる</button>
                 <div className="control-card output-card">
                   <label className="field-label" htmlFor="output-format">形式</label>
                   <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
                     {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
 
-                  <div className="resize-fields">
-                    <div className="field-label-row"><span className="field-label">出力サイズ</span><span className="field-help">幅または高さ</span></div>
-                    <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
-                    <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
-                  </div>
-                  <div className="aspect-ratio-control">
-                    <div className="field-label-row"><label className="field-label" htmlFor="aspect-ratio">アスペクト比</label><span className="field-help">切り抜き範囲に適用</span></div>
-                    <select id="aspect-ratio" value={editState.aspectRatio} onChange={(event) => setAspectRatio(event.target.value as AspectRatioPreset)}>
-                      {ASPECT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                  </div>
+                    {outputMime === 'image/png' ? (
+                      <p className="comparison-quality-note">PNGでは保存画質の設定はありません。</p>
+                    ) : (
+                      <div className="range-control comparison-quality-control">
+                        <div className="range-label"><label htmlFor="quality">保存画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
+                        <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} aria-describedby="quality-help" onChange={(event) => updateQuality(Number(event.target.value))} />
+                        <span id="quality-help" className="field-help">軽く ← → きれい · 容量の削減率とは異なります。</span>
+                      </div>
+                    )}
+
                   <div className="effective-size">
                     <span>有効な出力寸法</span>
                     <strong>{formatDimensions(geometry.outputSize)}</strong>
                   </div>
                 </div>
 
-                <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>
-                  ダウンロード .{getOutputExtension(outputMime)}
-                </button>
-                <p className="download-hint">ファイル名は安全な形に整えて保存します。</p>
-
                 <div className="metrics-card" aria-label="画像メトリクス">
                   <div className="metric-line"><span>元画像</span><strong>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</strong></div>
                   <div className="metric-line"><span>元の容量</span><strong>{formatBytes(asset.file.size)}</strong></div>
-                  <div className="metric-line quick-preview-metrics"><span>クイックプレビュー寸法（最大960px）</span><strong className="quick-preview-dimensions">{quickPreviewMetrics ? formatDimensions({ width: quickPreviewMetrics.outputWidth, height: quickPreviewMetrics.outputHeight }) : '未生成'}</strong></div>
-                  <div className="metric-line quick-preview-bytes"><span>クイックプレビュー容量</span><strong className="quick-preview-bytes-value">{quickPreviewMetrics ? formatBytes(quickPreviewMetrics.outputBytes) : '未生成'}</strong></div>
-                  <div className="metric-line full-output-metrics"><span>保存用画像寸法</span><strong className="full-output-dimensions">{fullOutputMetrics ? formatDimensions({ width: fullOutputMetrics.outputWidth, height: fullOutputMetrics.outputHeight }) : '未確認'}</strong></div>
-                  <div className="metric-line full-output-bytes"><span>保存用画像容量</span><strong className="full-output-bytes-value">{fullOutputMetrics ? formatBytes(fullOutputMetrics.outputBytes) : '未確認'}</strong></div>
-                  <div className="reduction-line"><span>容量の変化（保存用画像）</span><strong>{fullOutputMetrics ? `${fullOutputMetrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}%` : '未確認'}</strong></div>
+                  <div className="capacity-bars" aria-label="元画像と保存結果の容量比較">
+                    <div><span>元画像</span><div className="capacity-track"><span style={{ width: `${asset.file.size / Math.max(asset.file.size, fullOutputResult?.bytes ?? 0, 1) * 100}%` }} /></div></div>
+                    <div><span>保存結果</span><div className="capacity-track result-capacity"><span style={{ width: fullOutputResult ? `${fullOutputResult.bytes / Math.max(asset.file.size, fullOutputResult.bytes, 1) * 100}%` : '0%' }} /></div></div>
+                  </div>
+                  <div className="metric-line full-output-metrics"><span>保存用画像寸法</span><strong className="full-output-dimensions">{fullOutputMetrics ? formatDimensions({ width: fullOutputMetrics.outputWidth, height: fullOutputMetrics.outputHeight }) : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
+                  <div className="metric-line full-output-bytes"><span>保存用画像容量</span><strong className="full-output-bytes-value">{fullOutputMetrics ? formatBytes(fullOutputMetrics.outputBytes) : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
+                  <div className="reduction-line"><span>容量の変化（保存用画像）</span><strong>{fullOutputMetrics ? `${fullOutputMetrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}%` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
                 </div>
+                  <div className="resize-fields">
+                    <div className="field-label-row"><span className="field-label">出力サイズ</span><span className="field-help">幅または高さ</span></div>
+                    <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
+                    <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
+                  </div>
+                {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
-              </aside>
-            </section>
-
+            </aside>
+          </section>
+          <div className="editor-bottom">
+            <div className="mode-controls crop-controls" hidden={editorMode !== 'crop' || editorView !== 'edit'}>
+                  <div className="aspect-ratio-control">
+                    <div className="field-label-row"><label className="field-label" htmlFor="aspect-ratio">アスペクト比</label><span className="field-help">切り抜き範囲に適用</span></div>
+                    <select id="aspect-ratio" value={editState.aspectRatio} onChange={(event) => setAspectRatio(event.target.value as AspectRatioPreset)}>
+                      {ASPECT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="guide-control">
+                    <label htmlFor="composition-guide">構図補助線</label>
+                    <select id="composition-guide" value={compositionGuide} onChange={(event) => setCompositionGuide(event.target.value as CompositionGuide)}>
+                      {COMPOSITION_GUIDE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </div>
             <details className="advanced-controls">
-              <summary>詳細な切り抜き・位置調整</summary>
+              <summary>詳細</summary>
               <div className="advanced-controls-body">
                 <div className="crop-coordinates" aria-label="切り抜き数値 controls">
                   <label>
@@ -1175,8 +1120,26 @@ function App() {
 
               </div>
             </details>
-          </>
-        ) : (
+            </div>
+            <div className="mode-controls transform-controls" hidden={editorMode !== 'transform' || editorView !== 'edit'}>
+              <div className="straighten-control range-control">
+                <div className="range-label"><label htmlFor="straighten">傾き</label><output htmlFor="straighten">{(editState.straighten ?? 0).toFixed(1)}°</output><button type="button" className="text-button" onClick={() => updateEditState(current => ({ ...current, straighten: 0 }))}>0°に戻す</button></div>
+                <input id="straighten" type="range" min="-45" max="45" step="0.1" value={editState.straighten ?? 0} onChange={event => updateEditState(current => ({ ...current, straighten: Number(event.target.value) }))} />
+              </div>
+              <div className="transform-buttons">
+                  <button type="button" className="secondary-button" onClick={() => rotateBy(-90)}>↺ 左へ90°</button>
+                  <button type="button" className="secondary-button" onClick={() => rotateBy(90)}>↻ 右へ90°</button>
+                  <button type="button" aria-pressed={editState.flipHorizontal} className={`secondary-button${editState.flipHorizontal ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipHorizontal: !current.flipHorizontal }))}>↔ 左右反転</button>
+                  <button type="button" aria-pressed={editState.flipVertical} className={`secondary-button${editState.flipVertical ? ' is-selected' : ''}`} onClick={() => updateEditState((current) => ({ ...current, flipVertical: !current.flipVertical }))}>↕ 上下反転</button>
+
+              </div>
+            </div>
+            <nav className="edit-modes" aria-label="編集モード">
+              <button type="button" aria-pressed={editorMode === 'crop'} onClick={() => { setEditorMode('crop'); setEditorView('edit') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v16h16M2 6h16v16M9 6h9v9" /></svg><span>クロップ</span></button>
+              <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setEditorView('edit') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
+            </nav>
+          </div>
+        </> : (
           <label
             className={`drop-zone${dragging ? ' is-dragging' : ''}`}
             htmlFor="image-input"
@@ -1199,17 +1162,17 @@ function App() {
             <span id="drop-detail" className="drop-detail">JPEG・PNG・WebPの静止画に対応</span>
           </label>
         )}
-
         {errorMessage ? <p className="error-message" role="alert">{errorMessage}</p> : null}
-
+        {!asset ? <>
         <details className="privacy-details">
           <summary>処理とプライバシーについて</summary>
           <div className="privacy-details-body">
             <p>すべての処理はこのブラウザ内で完結します。ピクセルにデコードしてから再エンコードするため、出力画像のメタデータは削除されます。JPEGの回転もロスレス変換ではなく再エンコードです。</p>
           </div>
         </details>
+        </> : null}
       </main>
-
+      {!asset ? <>
       <footer className="site-footer">
         <div className="footer-inner">
           <nav className="footer-links" aria-label="フッターナビゲーション">
@@ -1221,6 +1184,7 @@ function App() {
           <span>© 2026 image-compressor-web</span>
         </div>
       </footer>
+      </> : null}
     </>
   )
 }

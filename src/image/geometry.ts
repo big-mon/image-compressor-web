@@ -31,6 +31,8 @@ export interface ResizeOptions {
 
 export interface ImageEditState {
   readonly rotation: Rotation
+  /** Fine rotation in degrees, before final-axis flips; omitted means zero. */
+  readonly straighten?: number
   readonly flipHorizontal: boolean
   readonly flipVertical: boolean
   readonly crop: CropRect
@@ -44,6 +46,7 @@ export interface ImageEditState {
 
 export interface ImageGeometry {
   readonly displaySize: Size
+  readonly straightening: { readonly degrees: number; readonly scale: number }
   readonly crop: CropRect
   readonly sourceCrop: CropRect
   readonly croppedSize: Size
@@ -286,6 +289,23 @@ function getDisplaySize(sourceSize: Size, rotation: Rotation): Size {
     : sourceSize
 }
 
+/** Minimum centered scale that keeps the entire display rectangle covered. */
+export function calculateStraightening(displaySize: Size, degrees = 0): ImageGeometry['straightening'] {
+  if (!Number.isFinite(degrees) || Math.abs(degrees) > 45) {
+    throw new Error('Straightening must be between -45 and 45 degrees.')
+  }
+  const radians = degrees * Math.PI / 180
+  const cosine = Math.cos(radians)
+  const sine = Math.abs(Math.sin(radians))
+  return {
+    degrees,
+    scale: Math.max(
+      cosine + displaySize.height / displaySize.width * sine,
+      cosine + displaySize.width / displaySize.height * sine,
+    ),
+  }
+}
+
 function mapDisplayedPointToSource(
   sourceSize: Size,
   rotation: Rotation,
@@ -293,10 +313,21 @@ function mapDisplayedPointToSource(
   point: Point,
   flipHorizontal: boolean,
   flipVertical: boolean,
+  straightening: ImageGeometry['straightening'],
 ): Point {
-  const unflippedPoint = {
+  let unflippedPoint = {
     x: flipHorizontal ? displaySize.width - point.x : point.x,
     y: flipVertical ? displaySize.height - point.y : point.y,
+  }
+
+  if (straightening.degrees !== 0) {
+    const radians = -straightening.degrees * Math.PI / 180
+    const x = (unflippedPoint.x - displaySize.width / 2) / straightening.scale
+    const y = (unflippedPoint.y - displaySize.height / 2) / straightening.scale
+    unflippedPoint = {
+      x: x * Math.cos(radians) - y * Math.sin(radians) + displaySize.width / 2,
+      y: x * Math.sin(radians) + y * Math.cos(radians) + displaySize.height / 2,
+    }
   }
 
   switch (rotation) {
@@ -321,6 +352,7 @@ function mapCropToSource(
   crop: CropRect,
   flipHorizontal: boolean,
   flipVertical: boolean,
+  straightening: ImageGeometry['straightening'],
 ): CropRect {
   const corners: readonly Point[] = [
     { x: crop.x, y: crop.y },
@@ -336,6 +368,7 @@ function mapCropToSource(
       corner,
       flipHorizontal,
       flipVertical,
+      straightening,
     ),
   )
   const minX = Math.min(...sourceCorners.map((corner) => corner.x))
@@ -411,6 +444,7 @@ export function rotateEditState(
 
 export function calculateImageGeometry(sourceSize: Size, state: ImageEditState): ImageGeometry {
   const displaySize = getDisplaySize(sourceSize, state.rotation)
+  const straightening = calculateStraightening(displaySize, state.straighten)
   const constrainedCrop = constrainCrop(state.crop, displaySize, state.aspectRatio)
   const crop = applyZoomAndPan(
     constrainedCrop,
@@ -423,6 +457,7 @@ export function calculateImageGeometry(sourceSize: Size, state: ImageEditState):
 
   return {
     displaySize,
+    straightening,
     crop,
     sourceCrop: mapCropToSource(
       sourceSize,
@@ -431,6 +466,7 @@ export function calculateImageGeometry(sourceSize: Size, state: ImageEditState):
       crop,
       state.flipHorizontal,
       state.flipVertical,
+      straightening,
     ),
     croppedSize,
     outputSize: calculateOutputSize(croppedSize, state.resize),

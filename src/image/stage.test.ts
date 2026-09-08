@@ -6,6 +6,11 @@ import {
 } from './stage'
 
 describe('editor stage presentation helpers', () => {
+  it('shares the straightening scale and angle before final-axis flips', () => {
+    expect(createStageTransform(90, true, false, { degrees: -12.5, scale: 1.4 })).toBe(
+      'translate(-50%, -50%) scaleX(-1) scaleY(1) scale(1.4) rotate(77.5deg)',
+    )
+  })
   it('rotates before applying a horizontal flip in final display axes', () => {
     expect(createStageTransform(90, true, false)).toBe(
       'translate(-50%, -50%) scaleX(-1) scaleY(1) rotate(90deg)',

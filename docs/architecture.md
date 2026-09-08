@@ -20,13 +20,13 @@ File/drop
   → App の object URL、metrics、download
 ```
 
-`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、明示的な保存サイズ確認と download では full output size を要求する。同じ編集 intent の確認済み full result があれば download はその Blob を再利用する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
+`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、出力設定パネルを開いている間に限り、編集停止から600ms経過し quick preview が完了すると full output size を自動で要求する。失敗時の再試行と download も full output size を要求する。同じ編集 intent の確認済み full result があれば download はその Blob を再利用する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
 
 ## Module contracts and seams
 
 | module | stable interface / ownership |
 | --- | --- |
-| `src/App.tsx` | browser UI、File input/drop、編集 intent、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
+| `src/App.tsx` | browser UI、File input/drop、編集 intent、単一画像領域の編集・比較切替、折りたたみ出力設定、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
 | `src/image/stage.ts` | `createStageTransform` と crop surface style。CSS 表示文字列だけを組み立て、Canvas のピクセル処理は所有しない。 |
@@ -39,6 +39,8 @@ File/drop
 算術の変更は geometry/scheduler/byte parser の focused unit test で説明する。Canvas、File、URL、Worker、CDP、download の変更は browser-effect boundary の E2E evidence まで必要である。
 
 ## State, cache, and stale requests
+
+full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中および出力設定パネルを閉じたときはタイマーを破棄する。すでに開始したfull処理は中断せず完了まで継続するため、その間の新しいpreviewは既存schedulerの契約どおり待機する。失敗時は自動ループを止めて再試行を提示する。容量バーはmetadata strip後のfull Blobと元Fileのbytesを共通スケールで表示し、容量増加も許容する。quickのbytesは保存容量として表示しない。
 
 1. File を受け取ると `App` は candidate として MIME を検査し、decode 完了を `fileLoadGeneration` で guard する。candidate の読み込み中・失敗時は committed source、編集、result URL、現行 preview の debounce/in-flight work を保持する。新しい選択は論理的に obsolete な export と candidate を無効化し、比較表示を解放する。
 2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。reset は candidate generation を進めて candidate を取り消し、committed source の編集だけを再処理する。
@@ -54,18 +56,20 @@ File/drop
 
 `DecodedSourcePixels` は decode 時点で source orientation を正規化した RGBA pixel buffer である。`createImageBitmap(file, { imageOrientation: 'from-image' })` が主経路で、bitmap は readback 後に close する。fallback の drawable 経路も同じ normalized-pixels interface を返す。
 
+`ImageEditState.straighten` は −45〜45 度の有限値で、未指定は0度。Worker境界で範囲・型を検証する。`geometry.straightening` が角度と自動拡大倍率を所有し、CSS stage・比較画像・Workerで共有する。90度回転後の表示寸法を W×H、傾きを θ として、倍率は `max(cosθ + H/W × |sinθ|, cosθ + W/H × |sinθ|)`。中心回転後に表示枠全体を覆う最小倍率であり、傾き変更だけでは表示寸法・crop・出力寸法を変えない。`sourceCrop` は最終軸のflip、傾き・拡大、90度回転を逆変換した四隅のbounding boxである。
+
 `CropRect` の座標は常に **final displayed-orientation pixels** で表す。したがって、90/270 度では `displaySize` の width/height が入れ替わり、flip はその最終表示軸に対して適用される。`sourceCrop` はこの crop を rotation/flip を逆写像して source 座標へ説明する値であり、UI crop を source 向きで再解釈してはならない。
 
 絶対的な順序は次の通りである。
 
 1. normalized source pixels を Canvas に置く。
-2. `rotation` で display canvas を作る。
+2. `rotation` と `straighten` による中心回転・自動拡大で display canvas を作る。
 3. `flipHorizontal` / `flipVertical` を display canvas の最終軸で適用する。
 4. final-display の `geometry.crop` を切り出す。
 5. `geometry.outputSize`（preview ならその比例縮小）へ resize する。
 6. requested MIME へ encode し、metadata を strip する。
 
-`stage.ts` の CSS string は `rotate(...)` を rightmost に置く。CSS transform は右から適用されるため、rotate が先、scaleX/scaleY が後となり、Worker の rotate-then-final-axis-flip と一致する。rotation、flip、crop、resize のどれかの順番を変えたら、geometry/stage unit と Chromium pixel evidence を同時に更新する。
+`stage.ts` の CSS string は合成角度の `rotate(...)` を rightmost に置き、傾きがある場合は自動拡大を挟む。CSS transform は右から適用されるため、rotate が先、scaleX/scaleY が後となり、Worker の rotate-then-final-axis-flip と一致する。rotation、flip、crop、resize のどれかの順番を変えたら、geometry/stage unit と Chromium pixel evidence を同時に更新する。
 
 ## Encoded metadata policy
 

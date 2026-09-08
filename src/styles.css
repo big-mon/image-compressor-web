@@ -5,14 +5,14 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --bg: #0c1113;
-  --panel: #141c1f;
-  --panel-raised: #192326;
-  --line: #2b3a3e;
+  --panel: #191919;
+  --panel-raised: #262626;
+  --line: #383838;
   --muted: #9aaeb3;
   --soft: #c2d0d2;
   --text: #f4f8f8;
-  --mint: #92e2c4;
-  --mint-dark: #132d28;
+  --mint: #f4cf65;
+  --mint-dark: #302a19;
   --orange: #ffb36b;
   --danger: #ff8e86;
 }
@@ -225,7 +225,7 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
   gap: clamp(0.75rem, 1.5vw, 1.25rem);
-  align-items: start;
+  align-items: stretch;
 }
 
 .editor-column,
@@ -245,39 +245,6 @@ h2 {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-}
-
-.section-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.75rem;
-}
-
-.section-heading .section-kicker {
-  margin-bottom: 0.3rem;
-}
-
-.compact-heading {
-  margin-bottom: 1rem;
-}
-
-.crop-editor-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0.65rem;
-}
-
-.crop-guidance,
-.comparison-guidance {
-  max-width: 34rem;
-  margin: 0;
-  color: var(--soft);
-  font-size: 0.9rem;
-  line-height: 1.5;
 }
 
 .status-chip {
@@ -344,7 +311,6 @@ h2 {
   user-select: none;
   pointer-events: none;
   transform-origin: center;
-  transition: transform 140ms ease;
 }
 
 .processed-preview,
@@ -363,19 +329,6 @@ h2 {
   width: 100%;
   height: 100%;
   object-fit: fill;
-}
-
-.processed-preview-pending {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  place-items: center;
-  padding: 0;
-  background: rgb(14 25 27 / 94%);
-  color: var(--soft);
-  font-size: clamp(0.75rem, 1.3vw, 0.95rem);
-  font-weight: 750;
-  text-align: center;
 }
 
 .crop-shade {
@@ -455,24 +408,6 @@ h2 {
 
 .comparison-section {
   margin-top: 1.25rem;
-}
-
-.comparison-heading {
-  align-items: flex-end;
-  margin-bottom: 0.65rem;
-}
-
-.comparison-card {
-  display: grid;
-  gap: 0.85rem;
-  padding: 1rem;
-  border: 1px solid var(--line);
-  border-radius: 0.9rem;
-  background: var(--panel);
-}
-
-.comparison-card input[type="range"] {
-  min-height: 2.75rem;
 }
 
 .comparison-viewport {
@@ -682,33 +617,6 @@ h2 {
   color: var(--muted);
   font-size: 0.875rem;
   line-height: 1.5;
-}
-
-.comparison-footer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.8rem 1rem;
-  padding-top: 0.85rem;
-  border-top: 1px solid var(--line);
-}
-
-.comparison-status {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.875rem;
-  line-height: 1.55;
-}
-
-.verify-output-button {
-  border-color: var(--mint);
-  background: var(--mint-dark);
-  color: var(--mint);
-  white-space: nowrap;
-}
-
-.verify-output-button:hover:not(:disabled) {
-  background: #1d3832;
 }
 
 .crop-guide {
@@ -1203,167 +1111,205 @@ input[type="range"] {
   border: 0;
 }
 
-@media (max-width: 64rem) {
-  .workspace {
-    grid-template-columns: 1fr;
-  }
 
-  .editor-column {
-    min-height: 0;
-  }
-
-  .stage-area {
-    height: clamp(28rem, calc(100svh - 10rem), 44rem);
-  }
-
-  .settings-column {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(14rem, 0.75fr);
-    gap: 0.8rem 1rem;
-  }
-
-  .output-card {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .metrics-card {
-    grid-column: 2;
-    grid-row: 2;
-    align-self: start;
-    margin-top: 0;
-  }
-
-  .compact-heading {
-    grid-column: 1 / -1;
-  }
-
-  .download-button {
-    grid-column: 1;
-    grid-row: 3;
-    align-self: start;
-    margin-top: 0;
-  }
-
-  .download-hint {
-    grid-column: 2;
-    grid-row: 3;
-    align-self: center;
-    margin: 0;
-  }
+/* The editor owns the viewport; only its settings and detail panels scroll. */
+[hidden] { display: none !important; }
+body:has(.editor-shell) > .static-content { display: none; }
+html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { height: 100dvh; min-height: 0; overflow: hidden; }
+.editor-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+  flex: none;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  overflow: hidden;
+  background: #101010;
+}
+.editor-shell .tool-toolbar {
+  flex: none;
+  gap: 0.65rem;
+  min-height: 3.75rem;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: #191919;
+}
+.toolbar-spacer { flex: 1; }
+.editor-shell .download-button { width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
+.editor-shell .download-button span { font-size: 0.8rem; }
+.editor-shell .workspace {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.editor-shell.output-open .workspace { grid-template-columns: minmax(0, 1fr) 20rem; }
+.editor-shell .editor-column { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+.view-switch { display: flex; justify-content: center; gap: 0.25rem; flex: none; padding: 0.4rem; }
+.view-switch button { min-width: 5rem; }
+.view-switch button, .edit-modes button {
+  min-height: 2.75rem;
+  padding: 0.4rem 1rem;
+  border: 0;
+  border-radius: 0.6rem;
+  background: transparent;
+  color: var(--muted);
+}
+.view-switch button[aria-pressed="true"], .edit-modes button[aria-pressed="true"] { color: var(--mint); background: #29261d; }
+.editor-shell .stage-area {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  padding: 0.75rem 3rem 3rem 0.75rem;
+  border: 0;
+  border-radius: 0;
+  background: #101010;
+  box-shadow: none;
+}
+.editor-shell .crop-surface { border: 0; border-radius: 0; box-shadow: none; }
+.editor-shell .crop-stage-meta {
+  min-height: 1.75rem;
+  flex: none;
+  padding: 0.15rem 1rem;
+  color: var(--muted);
+}
+.editor-shell .status-chip, .editor-shell .stage-preview-label {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.editor-shell .settings-column {
+  display: block;
+  min-height: 0;
+  padding: 0.5rem 1rem 1rem;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.panel-close { display: block; margin-left: auto; }
+.editor-shell .output-card, .editor-shell .metrics-card { padding: 0; border: 0; border-radius: 0; }
+.editor-shell .metrics-card { padding-top: 1rem; border-top: 1px solid var(--line); margin-top: 1rem; }
+.capacity-bars { display: grid; gap: 0.65rem; font-size: 0.8rem; color: var(--muted); }
+.capacity-track { height: 0.6rem; margin-top: 0.3rem; overflow: hidden; border-radius: 1rem; background: #333; }
+.capacity-track span { display: block; height: 100%; background: #a0a0a0; }
+.result-capacity span { background: var(--mint); }
+.editor-bottom {
+  position: relative;
+  flex: none;
+  padding: 0.5rem 1rem max(0.4rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.mode-controls { display: flex; align-items: center; justify-content: center; gap: 1rem; }
+.crop-controls .aspect-ratio-control { width: 10rem; }
+.crop-controls .field-help { display: none; }
+.crop-controls .guide-control { margin: 0; }
+.crop-controls .guide-control select { min-height: 2.75rem; }
+.crop-controls .advanced-controls { margin: 0; border: 0; background: transparent; }
+.advanced-controls-body {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(32rem, 100%);
+  max-height: 45dvh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  z-index: 10;
+  padding: 0 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem 1rem 0 0;
+  background: var(--panel);
+}
+.straighten-control { width: min(22rem, 100%); }
+.transform-buttons { display: flex; gap: 0.5rem; }
+.edit-modes { display: flex; justify-content: center; gap: 1.5rem; margin-top: 0.5rem; }
+.edit-modes button { display: grid; justify-items: center; gap: 0.25rem; min-width: 6.5rem; font-size: 0.8rem; }
+.edit-modes svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.editor-shell .comparison-section { flex: 1; min-height: 0; margin: 0; }
+.comparison-card { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.comparison-stage { display: grid; flex: 1; min-height: 0; padding: 0.5rem 1rem; container-type: size; place-items: center; }
+.editor-shell .comparison-viewport { max-height: 100%; margin: 0; border: 0; border-radius: 0; }
+.comparison-controls { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 0.4rem 1rem; padding: 0.5rem 1rem; flex: none; }
+.comparison-inspection-controls { grid-column: 1 / -1; display: flex; justify-content: center; }
+.comparison-inspection-controls .field-help { display: none; }
+.comparison-endpoints { display: none; }
+.comparison-split-control { padding: 0; }
+.editor-shell .error-message { flex: none; margin: 0; padding: 0.4rem 1rem; max-height: 20dvh; overflow: auto; border-radius: 0; }
+input[type="range"] { min-height: 2.75rem; }
+input[type="number"], select { background-color: #101010; }
+.secondary-button:hover, .secondary-button.is-selected,
+.comparison-mode-button:hover:not(:disabled), .comparison-mode-button.is-selected,
+.comparison-inspection-button:hover:not(:disabled), .comparison-inspection-button.is-selected { background: #302a19; border-color: var(--mint); }
+@media (max-width: 767px) {
+  .editor-shell .tool-toolbar { gap: 0.3rem; padding: 0.35rem 0.5rem; }
+  .editor-shell .tool-toolbar button, .editor-shell .change-image-button { padding: 0.45rem 0.5rem; font-size: 0.8rem; }
+  .editor-shell .download-button { min-width: 3rem; }
+  .editor-shell .download-button span { display: none; }
+  .editor-shell.output-open .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 40%); }
+  .editor-shell .settings-column { border-left: 0; border-top: 1px solid var(--line); }
+  .editor-shell .crop-stage-meta { padding-inline: 0.5rem; gap: 0.25rem; }
+  .editor-shell .stage-preview-label { display: none; }
+  .editor-bottom { padding-inline: 0.5rem; }
+  .mode-controls { gap: 0.5rem; }
+  .crop-controls { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; }
+  .crop-controls .aspect-ratio-control { width: auto; }
+  .crop-controls .guide-control { display: grid; gap: 0.45rem; }
+  .crop-controls .guide-control select { width: 100%; min-width: 0; }
+  .advanced-controls summary { padding: 0.5rem; min-height: 2.75rem; }
+  .transform-controls { flex-direction: column; gap: 0; }
+  .transform-buttons { gap: 0.3rem; }
+  .transform-buttons button { padding: 0.4rem; font-size: 0.8rem; }
+  .comparison-controls { gap: 0.25rem; padding: 0.25rem 0.5rem; }
+  .comparison-mode-button, .comparison-inspection-button { font-size: 0.75rem; padding: 0.3rem; }
+  .comparison-split-control .range-label { font-size: 0.7rem; }
+  .comparison-split-control output { display: none; }
+  .footer-inner { flex-direction: column; align-items: start; }
+}
+@media (max-height: 500px) {
+  .editor-shell .tool-toolbar { min-height: 2.75rem; padding-block: 0; }
+  .view-switch { padding-block: 0; }
+  .editor-bottom { padding-top: 0; }
+  .edit-modes { margin: 0; }
+  .edit-modes button { display: flex; align-items: center; }
+  .transform-controls { flex-direction: row; }
+  .transform-buttons { flex-wrap: wrap; gap: 0.15rem; }
+  .transform-buttons button { min-height: 2.75rem; padding: 0.1rem 0.3rem; }
+  .editor-shell .crop-stage-meta { display: none; }
+  .comparison-controls { display: flex; flex-wrap: wrap; }
+  .comparison-inspection-controls { gap: 0.3rem; }
+  .comparison-split-control { flex: 1; }
 }
 
-@media (max-width: 38rem) {
-  .shell {
-    padding: 0.6rem 0.55rem 1.5rem;
+.settings-column > .resize-fields { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+@media (max-height: 500px) {
+  .editor-shell .stage-area { padding: 0.5rem; }
+  .editor-shell .crop-handle { right: 0; bottom: 0; }
+  .editor-shell .crop-handle::after { left: auto; top: auto; right: 0; bottom: 0; }
+  .crop-controls .field-label-row, .crop-controls .guide-control label,
+  .straighten-control .range-label label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
-
-  .tool-toolbar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: flex-start;
-    gap: 0.65rem;
-    padding: 0.6rem;
-  }
-
-  .toolbar-copy {
-    display: block;
-    width: 100%;
-  }
-
-  .tool-reassurance {
-    margin-top: 0.2rem;
-    white-space: nowrap;
-  }
-
-  .toolbar-actions {
-    align-items: center;
-    justify-content: flex-start;
-    flex-direction: row;
-    gap: 0.35rem;
-  }
-
-  .section-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.65rem;
-  }
-
-  .crop-editor-heading,
-  .comparison-heading {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .crop-coordinates {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .stage-area {
-    height: clamp(27rem, calc(100svh - 9rem), 42rem);
-    padding: 0.3rem 2.75rem 2.75rem 0.3rem;
-  }
-
-  .crop-stage-meta {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-
-  .crop-processing-status {
-    text-align: left;
-  }
-
-  .drop-zone {
-    min-height: clamp(26rem, calc(100svh - 8rem), 42rem);
-    padding: 1.5rem;
-  }
-
-  .settings-column {
-    display: block;
-  }
-
-  .metrics-card {
-    margin-top: 0.8rem;
-  }
-
-  .guide-control {
-    flex: 1 1 100%;
-    margin-inline-start: 0;
-  }
-
-  .download-button {
-    margin-top: 0.8rem;
-  }
-
-  .download-hint {
-    margin-top: 0.5rem;
-    text-align: left;
-  }
-
-  .comparison-card {
-    padding: 0.7rem;
-  }
-
-  .comparison-inspection-controls {
-    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .comparison-inspection-controls .field-help {
-    grid-column: 1 / -1;
-  }
-
-  .comparison-footer {
-    grid-template-columns: 1fr;
-  }
-
-  .verify-output-button {
-    width: 100%;
-  }
-
-  .footer-inner {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+  .crop-controls .aspect-ratio-control, .crop-controls .guide-control { gap: 0; }
+  .comparison-split-control .range-label { display: none; }
+  .comparison-stage { padding-block: 0.25rem; }
+  .straighten-control { display: flex; align-items: center; gap: 0.5rem; width: 45%; }
+  .straighten-control input { min-width: 0; }
+  .straighten-control .range-label { flex: none; gap: 0.25rem; }
+}
+@media (max-height: 500px) and (max-width: 767px) {
+  .editor-shell.output-open .workspace { grid-template-rows: minmax(0, 1fr) minmax(0, 30%); }
 }

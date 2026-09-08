@@ -33,17 +33,6 @@ const SCREENSHOT_DIRECTORY = process.env.E2E_SCREENSHOT_DIR ? resolve(process.en
 const PR8_ASSERTION_TIMEOUT_MS = 3_000
 const DESKTOP_VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }
 const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }
-const TABLET_SAVE_LAYOUT_VIEWPORTS = [
-  ['tablet-800', { width: 800, height: 1000, deviceScaleFactor: 1, mobile: false }],
-  ['tablet-breakpoint-low', { width: 609, height: 1000, deviceScaleFactor: 1, mobile: false }],
-  ['tablet-breakpoint-high', { width: 1024, height: 1000, deviceScaleFactor: 1, mobile: false }],
-]
-const CROP_SURFACE_SIZING_CASES = [
-  { key: 'landscape-16-9', filename: 'e2e-landscape-16-9.png', width: 160, height: 90 },
-  { key: 'portrait-1-2', filename: 'e2e-portrait-1-2.png', width: 160, height: 320 },
-  { key: 'panorama-10-1', filename: 'e2e-panorama-10-1.png', width: 1000, height: 100 },
-]
-
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -64,10 +53,6 @@ function normalizeBasePath(value) {
   return basePath
 }
 
-function isRasterWorkerAssetPath(pathname, basePath) {
-  const assetPrefix = `${basePath}assets/`
-  return pathname.startsWith(assetPrefix) && /^raster\.worker-[^/]+\.js$/i.test(pathname.slice(assetPrefix.length))
-}
 
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
@@ -542,7 +527,9 @@ async function installWorkerProcessGate(cdp, sessionId) {
       armed: false,
       held: false,
       payload: undefined,
-      arm() {
+      requests: [],
+      arm(preview) {
+        this.preview = preview
         if (this.payload) throw new Error('The E2E Worker process gate is already holding a request.')
         this.armed = true
         this.held = false
@@ -592,7 +579,8 @@ async function installWorkerProcessGate(cdp, sessionId) {
     }
     const gatedPostMessage = function(message, transfer) {
       if (message && typeof message === 'object' && message.type === 'process') {
-        if (gate.armed && !gate.payload) {
+        gate.requests.push({preview: message.output.preview, time: performance.now(), quality: message.output.quality})
+        if (gate.armed && !gate.payload && (gate.preview === undefined || message.output.preview === gate.preview)) {
           gate.armed = false
           gate.held = true
           gate.payload = { message, transfer, worker: this }
@@ -753,7 +741,7 @@ async function readPr8State(cdp, sessionId) {
       previewNaturalHeight: preview instanceof HTMLImageElement ? preview.naturalHeight : 0,
       previewNaturalWidth: preview instanceof HTMLImageElement ? preview.naturalWidth : 0,
       previewUrl: preview instanceof HTMLImageElement ? preview.src : '',
-      renderedSize: readDimensions('.quick-preview-dimensions'),
+      renderedSize: document.querySelector('.workspace')?.dataset.quickWidth + ' × ' + document.querySelector('.workspace')?.dataset.quickHeight + ' px',
       sourceDimensions: readDimensions('.metrics-card .metric-line:first-child strong'),
       sourceUrl: source instanceof HTMLImageElement ? source.src : '',
       status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
@@ -795,20 +783,6 @@ async function waitForFileLoad(cdp, sessionId) {
   }
 }
 
-async function runPersistentComparisonRedRegression({ cdp, fixturePath, pageUrl, sessionId }) {
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await cdp.send('Page.navigate', { url: pageUrl }, sessionId)
-  await waitForDom(cdp, sessionId, `document.readyState === 'complete' && document.querySelector('input[type="file"]') !== null`, 'the preview UX regression page')
-  await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForFileLoad(cdp, sessionId)
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the preview UX regression Worker preview')
-
-  await activateComparisonModeWithMouse(cdp, sessionId, 'original')
-  const state = await readComparisonState(cdp, sessionId)
-  assert(state.comparisonMode === 'original' && state.resultLayer?.visibility === 'hidden', `Persistent comparison did not remain on the original side after a click: ${JSON.stringify(state)}`)
-  assert(state.source?.visible && state.crop?.visible && state.processedInCropCount === 0 && state.pendingMaskCount === 0, `The persistent comparison click covered or removed the crop editor: ${JSON.stringify(state)}`)
-  return state
-}
 
 async function setViewport(cdp, sessionId, viewport) {
   await cdp.send('Emulation.setDeviceMetricsOverride', {
@@ -836,30 +810,6 @@ async function captureScreenshot(cdp, sessionId, filename) {
   return screenshotPath
 }
 
-async function captureScreenshotSamples(cdp, sessionId, points) {
-  const result = await cdp.send('Page.captureScreenshot', {
-    captureBeyondViewport: false,
-    format: 'png',
-    fromSurface: true,
-  }, sessionId)
-  return evaluate(cdp, sessionId, `(async () => {
-    const image = new Image()
-    image.src = ${JSON.stringify(`data:image/png;base64,${result.data}`)}
-    await image.decode()
-    const canvas = document.createElement('canvas')
-    canvas.width = image.naturalWidth
-    canvas.height = image.naturalHeight
-    const context = canvas.getContext('2d', { willReadFrequently: true })
-    if (!context) throw new Error('Could not create a screenshot sampling context.')
-    context.drawImage(image, 0, 0)
-    return ${JSON.stringify(points)}.map(([x, y]) => {
-      const pixelX = Math.max(0, Math.min(canvas.width - 1, Math.round(x)))
-      const pixelY = Math.max(0, Math.min(canvas.height - 1, Math.round(y)))
-      const [red, green, blue, alpha] = context.getImageData(pixelX, pixelY, 1, 1).data
-      return { alpha, blue, green, red }
-    })
-  })()`)
-}
 
 async function captureToolLayout(cdp, sessionId) {
   return evaluate(cdp, sessionId, `(() => {
@@ -963,7 +913,7 @@ async function captureToolLayout(cdp, sessionId) {
       previewLabelText: document.querySelector('.stage-preview-label')?.textContent?.trim() ?? '',
       processedPreview: describeProcessedPreview(document.querySelector('.processed-preview')),
       processedPreviewCount: document.querySelectorAll('.processed-preview').length,
-      renderedSize: readDimensions('.quick-preview-dimensions'),
+      renderedSize: document.querySelector('.workspace')?.dataset.quickWidth + ' × ' + document.querySelector('.workspace')?.dataset.quickHeight + ' px',
       fullOutputSize: readDimensions('.full-output-dimensions'),
       settings: describe('.settings-column'),
       sourceImageCount: document.querySelectorAll('.stage-image').length,
@@ -983,39 +933,6 @@ async function captureToolLayout(cdp, sessionId) {
   })()`)
 }
 
-async function captureSaveLayout(cdp, sessionId) {
-  return evaluate(cdp, sessionId, `(() => {
-    const describe = (selector) => {
-      const element = document.querySelector(selector)
-      if (!element) return null
-      const rect = element.getBoundingClientRect()
-      return {
-        bottom: rect.bottom,
-        height: rect.height,
-        left: rect.left,
-        right: rect.right,
-        top: rect.top,
-        width: rect.width,
-      }
-    }
-    const settings = document.querySelector('.settings-column')
-    const settingsStyle = settings ? getComputedStyle(settings) : null
-    return {
-      documentClientWidth: document.documentElement.clientWidth,
-      documentScrollWidth: document.documentElement.scrollWidth,
-      download: describe('.download-button'),
-      hint: describe('.download-hint'),
-      metrics: describe('.metrics-card'),
-      outputCard: describe('.output-card'),
-      settings: describe('.settings-column'),
-      settingsDisplay: settingsStyle?.display,
-      settingsGridTemplateColumns: settingsStyle?.gridTemplateColumns,
-      viewportHeight: window.innerHeight,
-      viewportWidth: window.innerWidth,
-      bodyScrollWidth: document.body.scrollWidth,
-    }
-  })()`)
-}
 
 function assertVisibleRect(rect, description) {
   assert(rect?.visible && rect.width > 0 && rect.height > 0, `${description} is not visible: ${JSON.stringify(rect)}`)
@@ -1024,70 +941,6 @@ function assertVisibleRect(rect, description) {
 function assertInsideViewport(rect, viewport, description) {
   assertVisibleRect(rect, description)
   assert(rect.top >= -1 && rect.bottom <= viewport.height + 1, `${description} is outside the initial viewport: ${JSON.stringify({ rect, viewport })}`)
-}
-
-function assertRectsDoNotOverlap(first, second, description) {
-  const overlaps = first.left < second.right - 1 &&
-    first.right > second.left + 1 &&
-    first.top < second.bottom - 1 &&
-    first.bottom > second.top + 1
-  assert(!overlaps, `${description} overlap: ${JSON.stringify({ first, second })}`)
-}
-
-async function runTabletSaveLayoutRegression({ cdp, sessionId }) {
-  const results = {}
-  for (const [key, viewport] of TABLET_SAVE_LAYOUT_VIEWPORTS) {
-    await setViewport(cdp, sessionId, viewport)
-    await waitForDom(cdp, sessionId, `window.innerWidth === ${viewport.width} && window.innerHeight === ${viewport.height}`, `the ${key} save layout viewport`)
-    await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
-    const layout = await captureSaveLayout(cdp, sessionId)
-    assert(layout.settingsDisplay === 'grid', `${key} settings did not use the tablet grid: ${JSON.stringify(layout)}`)
-    assert(layout.viewportWidth === viewport.width && layout.viewportHeight === viewport.height, `Unexpected ${key} viewport: ${JSON.stringify(layout)}`)
-    assert(layout.documentScrollWidth <= layout.documentClientWidth + 1 && layout.bodyScrollWidth <= layout.documentClientWidth + 1, `${key} layout overflows horizontally: ${JSON.stringify(layout)}`)
-    assert(layout.download.height >= 40 && layout.download.height <= 56, `${key} download button is not a normal-height control: ${JSON.stringify(layout)}`)
-    assert(layout.download.top >= layout.outputCard.bottom - 1, `${key} download button overlaps the output card: ${JSON.stringify(layout)}`)
-    assert(layout.hint.top >= layout.outputCard.bottom - 1, `${key} save hint overlaps the output card: ${JSON.stringify(layout)}`)
-    assert(layout.metrics.top >= layout.settings.top - 1, `${key} metrics card escaped the settings flow: ${JSON.stringify(layout)}`)
-    assertRectsDoNotOverlap(layout.outputCard, layout.metrics, `${key} output card and metrics card`)
-    assertRectsDoNotOverlap(layout.outputCard, layout.download, `${key} output card and download button`)
-    assertRectsDoNotOverlap(layout.metrics, layout.hint, `${key} metrics card and save hint`)
-    const downloadCenter = (layout.download.top + layout.download.bottom) / 2
-    const hintCenter = (layout.hint.top + layout.hint.bottom) / 2
-    assert(Math.abs(downloadCenter - hintCenter) <= 2, `${key} download button and hint are not a coherent save row: ${JSON.stringify({ download: layout.download, hint: layout.hint })}`)
-
-    const scrolledButton = await evaluate(cdp, sessionId, `(() => {
-      const button = document.querySelector('.download-button')
-      if (!(button instanceof HTMLElement)) return null
-      button.scrollIntoView({ block: 'center', inline: 'nearest' })
-      const rect = button.getBoundingClientRect()
-      return {
-        bottom: rect.bottom,
-        left: rect.left,
-        right: rect.right,
-        top: rect.top,
-        viewportHeight: window.innerHeight,
-        viewportWidth: window.innerWidth,
-      }
-    })()`)
-    assert(scrolledButton && scrolledButton.top >= 0 && scrolledButton.bottom <= scrolledButton.viewportHeight && scrolledButton.left >= 0 && scrolledButton.right <= scrolledButton.viewportWidth, `${key} download button was not usable after scrolling it into view: ${JSON.stringify(scrolledButton)}`)
-    results[key] = { layout, scrolledButton }
-  }
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after tablet save layout checks')
-  await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
-  return results
-}
-
-function assertProcessedPreviewAligned(layout, mode) {
-  const preview = layout.processedPreview
-  const description = `${mode} processed preview image`
-  assert(layout.processedPreviewCount === 1 && preview, `Expected one comparison result image on ${mode}: ${JSON.stringify(layout)}`)
-  assertVisibleRect(preview.image, description)
-  assert(preview.objectFit === 'fill', `${description} does not fill the aligned comparison frame: ${JSON.stringify(preview)}`)
-  assert(preview.minWidth === '0px' && preview.minHeight === '0px', `${description} uses crop-rectangle minimum bounds: ${JSON.stringify(preview)}`)
-  assert(preview.naturalWidth === layout.renderedSize?.width && preview.naturalHeight === layout.renderedSize?.height, `${description} natural dimensions do not match the rendered metrics: ${JSON.stringify({ preview, renderedSize: layout.renderedSize })}`)
-  assert(layout.comparisonViewport && Math.abs(preview.image.left - layout.comparisonViewport.left) <= 1 && Math.abs(preview.image.right - layout.comparisonViewport.right) <= 1 && Math.abs(preview.image.top - layout.comparisonViewport.top) <= 1 && Math.abs(preview.image.bottom - layout.comparisonViewport.bottom) <= 1, `${description} is not mapped to the comparison frame: ${JSON.stringify({ viewport: layout.comparisonViewport, preview: preview.image })}`)
-  assert(preview.backgroundColor !== 'rgba(0, 0, 0, 0)' && preview.backgroundImage !== 'none', `${description} has no opaque checker/base behind transparent pixels: ${JSON.stringify(preview)}`)
 }
 
 async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
@@ -1115,177 +968,6 @@ async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
   })()`)
   assert(focusReachedDropZone === true, `The empty ${mode} drop zone could not receive keyboard focus.`)
   return layout
-}
-
-async function assertLoadedFirstView(cdp, sessionId, viewport, mode) {
-  const layout = await captureToolLayout(cdp, sessionId)
-  assert(layout.viewportWidth === viewport.width && layout.viewportHeight === viewport.height, `Unexpected ${mode} viewport: ${JSON.stringify(layout)}`)
-  assert(layout.dropZone === null, `The full upload area remains after loading on ${mode}: ${JSON.stringify(layout.dropZone)}`)
-  assertVisibleRect(layout.changeImage, `${mode} change-image affordance`)
-  assert(layout.editorHeaderPresent === true, `The crop editor heading is missing on ${mode}: ${JSON.stringify(layout)}`)
-  assert(layout.sourceImageCount === 1, `The original image is not represented by exactly one stage image on ${mode}: ${JSON.stringify(layout)}`)
-  assert(layout.cropGuidance === '枠内が残る範囲です。暗い外側は削除されます。', `The crop guidance changed unexpectedly on ${mode}: ${JSON.stringify(layout)}`)
-  assertVisibleRect(layout.cropSurface, `${mode} crop surface`)
-  assertVisibleRect(layout.stageArea, `${mode} stage area`)
-  assert(layout.reassurance?.text === EXPECTED_REASSURANCE, `The loaded ${mode} privacy reassurance changed unexpectedly: ${JSON.stringify(layout.reassurance)}`)
-  assertInsideViewport(layout.reassurance, viewport, `no-upload reassurance on loaded ${mode}`)
-  assert(layout.privacyDetails?.open === false, `Technical privacy details must remain collapsed on loaded ${mode}: ${JSON.stringify(layout.privacyDetails)}`)
-  assert(Math.abs(layout.stageArea.width - layout.editor.width) <= 2, `${mode} stage area does not fill the editor column: ${JSON.stringify({ editor: layout.editor, stageArea: layout.stageArea })}`)
-  assert(layout.stageArea.height >= (mode === 'mobile' ? 400 : 500), `${mode} stage area was not enlarged for the full-window editor: ${JSON.stringify({ stageArea: layout.stageArea, viewport })}`)
-  assert(layout.cropSurface.height > (mode === 'mobile' ? 204 : 324), `${mode} portrait crop surface did not grow beyond the retired height cap: ${JSON.stringify(layout.cropSurface)}`)
-  assertVisibleRect(layout.stageMeta, `${mode} crop stage status row`)
-  assertVisibleRect(layout.editorActions, `${mode} crop action row`)
-  assertVisibleRect(layout.compositionGuide, `${mode} composition guide control`)
-  assert(layout.editorActions.top >= layout.stageMeta.bottom - 1 && layout.editorActions.top - layout.stageMeta.bottom < 24, `${mode} crop action row is not immediately after the stage status row: ${JSON.stringify({ stageArea: layout.stageArea, stageMeta: layout.stageMeta, cropSurface: layout.cropSurface, editorActions: layout.editorActions })}`)
-  assertVisibleRect(layout.aspectRatio, `${mode} aspect ratio control`)
-  assertVisibleRect(layout.comparisonSection, `${mode} comparison section`)
-  assertVisibleRect(layout.comparisonViewport, `${mode} comparison viewport`)
-  assertVisibleRect(layout.comparisonSplit, `${mode} comparison split control`)
-  assertVisibleRect(layout.comparisonVerify, `${mode} full-output confirmation control`)
-  assert(layout.comparisonMode === '比較', `${mode} comparison mode did not default to a stable split: ${JSON.stringify(layout)}`)
-  assert(layout.previewLabelText === '元画像（切り抜き編集）', `${mode} crop-stage original label is not visible: ${JSON.stringify(layout.previewLabel)}`)
-  assertProcessedPreviewAligned(layout, mode)
-  assert(layout.advancedControls && layout.advancedControls.open === false && layout.advancedControls.top > layout.editorActions.bottom, `Advanced controls are not deferred below the image editor on ${mode}: ${JSON.stringify(layout.advancedControls)}`)
-  assert(layout.noHorizontalOverflow, `Loaded ${mode} layout overflows horizontally: ${JSON.stringify(layout)}`)
-
-  if (mode === 'desktop') {
-    assertInsideViewport(layout.stageArea, viewport, 'desktop stage area')
-    assert(layout.settings.left >= layout.editor.right - 1, `Desktop output settings are not in a right sidebar: ${JSON.stringify({ editor: layout.editor, settings: layout.settings })}`)
-    assertInsideViewport(layout.outputFormat, viewport, 'desktop output format')
-    assertVisibleRect(layout.quality, 'desktop save-quality control')
-    assert(layout.quality.top >= layout.comparisonSection.top - 1, `Desktop save-quality control is not kept with the comparison section: ${JSON.stringify({ comparisonSection: layout.comparisonSection, quality: layout.quality })}`)
-    assertInsideViewport(layout.download, viewport, 'desktop download')
-    assert(layout.outputFormat.fontSize >= 16 && layout.download.fontSize >= 16, `Desktop key output controls are too small: ${JSON.stringify({ outputFormat: layout.outputFormat, download: layout.download })}`)
-  } else {
-    assert(layout.settings.left <= layout.workspace.left + 1, `Mobile output settings did not align with the image workspace: ${JSON.stringify({ workspace: layout.workspace, settings: layout.settings })}`)
-    assert(layout.settings.top >= layout.editorActions.bottom - 1, `Mobile output settings overlap the crop action row: ${JSON.stringify({ editorActions: layout.editorActions, settings: layout.settings })}`)
-    assert(layout.outputFormat.top > layout.editorActions.bottom, `Mobile output controls do not follow the image workspace: ${JSON.stringify({ editorActions: layout.editorActions, outputFormat: layout.outputFormat })}`)
-    assertVisibleRect(layout.outputFormat, 'mobile output format')
-    assertVisibleRect(layout.quality, 'mobile quality')
-    assertVisibleRect(layout.download, 'mobile download')
-    assert(layout.outputFormat.top < layout.advancedControls.top && layout.download.bottom < layout.advancedControls.top, `Mobile essential output/save controls do not precede advanced controls: ${JSON.stringify(layout)}`)
-  }
-  return layout
-}
-
-async function captureCropSurfaceSizing(cdp, sessionId) {
-  return evaluate(cdp, sessionId, `(() => {
-    const surface = document.querySelector('.crop-surface')
-    const sourceImage = document.querySelector('.stage-image')
-    const stageArea = document.querySelector('.stage-area')
-    const stageAreaRect = stageArea?.getBoundingClientRect()
-    const stageAreaStyle = stageArea ? getComputedStyle(stageArea) : undefined
-    const surfaceRect = surface?.getBoundingClientRect()
-    const sourceRect = sourceImage?.getBoundingClientRect()
-    const toPixels = (value) => Number.parseFloat(value) || 0
-    const contentBox = stageAreaRect && stageAreaStyle ? {
-      height: stageAreaRect.height -
-        toPixels(stageAreaStyle.paddingTop) -
-        toPixels(stageAreaStyle.paddingBottom) -
-        toPixels(stageAreaStyle.borderTopWidth) -
-        toPixels(stageAreaStyle.borderBottomWidth),
-      width: stageAreaRect.width -
-        toPixels(stageAreaStyle.paddingLeft) -
-        toPixels(stageAreaStyle.paddingRight) -
-        toPixels(stageAreaStyle.borderLeftWidth) -
-        toPixels(stageAreaStyle.borderRightWidth),
-    } : undefined
-    const describeBox = (rect) => rect ? {
-      bottom: rect.bottom,
-      height: rect.height,
-      left: rect.left,
-      right: rect.right,
-      top: rect.top,
-      width: rect.width,
-    } : undefined
-    return {
-      availableHeight: contentBox?.height,
-      availableWidth: contentBox?.width,
-      sourceNaturalHeight: sourceImage?.naturalHeight,
-      sourceNaturalWidth: sourceImage?.naturalWidth,
-      sourceRect: describeBox(sourceRect),
-      sourceFitsSurface: Boolean(sourceRect && surfaceRect &&
-        sourceRect.left >= surfaceRect.left - 2 &&
-        sourceRect.right <= surfaceRect.right + 2 &&
-        sourceRect.top >= surfaceRect.top - 2 &&
-        sourceRect.bottom <= surfaceRect.bottom + 2),
-      stageArea: describeBox(stageAreaRect),
-      surfaceFitsStageArea: Boolean(surfaceRect && stageAreaRect &&
-        surfaceRect.left >= stageAreaRect.left - 2 &&
-        surfaceRect.right <= stageAreaRect.right + 2 &&
-        surfaceRect.top >= stageAreaRect.top - 2 &&
-        surfaceRect.bottom <= stageAreaRect.bottom + 2),
-      surfaceHeight: surfaceRect?.height,
-      surfaceRatio: surfaceRect ? surfaceRect.width / surfaceRect.height : undefined,
-      surfaceWidth: surfaceRect?.width,
-      viewportHeight: window.innerHeight,
-      viewportWidth: window.innerWidth,
-    }
-  })()`)
-}
-
-async function runCropSurfaceSizingRegression({ cdp, sessionId, layoutFixtures }) {
-  const results = {}
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport for crop surface sizing')
-
-  for (const fixture of layoutFixtures) {
-    const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
-      const canvas = document.createElement('canvas')
-      canvas.width = ${fixture.width}
-      canvas.height = ${fixture.height}
-      const context = canvas.getContext('2d')
-      if (!context) throw new Error('Could not create a 2D canvas context for the layout fixture.')
-      const halfWidth = canvas.width / 2
-      const halfHeight = canvas.height / 2
-      const quadrants = [
-        ['#e63946', 0, 0, halfWidth, halfHeight],
-        ['#457b9d', halfWidth, 0, halfWidth, halfHeight],
-        ['#f4a261', 0, halfHeight, halfWidth, halfHeight],
-        ['#2a9d8f', halfWidth, halfHeight, halfWidth, halfHeight],
-      ]
-      for (const [color, x, y, width, height] of quadrants) {
-        context.fillStyle = color
-        context.fillRect(x, y, width, height)
-      }
-      return canvas.toDataURL('image/png')
-    })()`)
-    const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
-    assert(encodedFixture, `${fixture.key} browser canvas did not return a PNG data URL.`)
-    await writeFile(fixture.path, Buffer.from(encodedFixture, 'base64'))
-    await setFileInput(cdp, sessionId, fixture.path)
-    const expectedDimensions = `${fixture.width} × ${fixture.height} px`
-    await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === ${JSON.stringify(expectedDimensions)}`, `${fixture.key} source dimensions`)
-    await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, `${fixture.key} Worker preview`)
-
-    const caseResults = {}
-    for (const [mode, viewport] of [
-      ['desktop', DESKTOP_VIEWPORT],
-      ['mobile', MOBILE_VIEWPORT],
-    ]) {
-      await setViewport(cdp, sessionId, viewport)
-      await waitForDom(cdp, sessionId, `window.innerWidth === ${viewport.width} && window.innerHeight === ${viewport.height}`, `the ${mode} viewport for ${fixture.key}`)
-      const layout = await captureCropSurfaceSizing(cdp, sessionId)
-      const aspectRatio = fixture.width / fixture.height
-      assert(layout.sourceNaturalWidth === fixture.width && layout.sourceNaturalHeight === fixture.height, `${fixture.key} source dimensions were not decoded as expected: ${JSON.stringify(layout)}`)
-      assert(layout.availableWidth > 0 && layout.availableHeight > 0, `${fixture.key} has no measurable ${mode} stage area: ${JSON.stringify(layout)}`)
-      assert(layout.surfaceWidth <= layout.availableWidth + 2 && layout.surfaceHeight <= layout.availableHeight + 2, `${fixture.key} escaped the ${mode} stage area bounds: ${JSON.stringify(layout)}`)
-      assert(layout.surfaceFitsStageArea, `${fixture.key} was not letterboxed within the ${mode} stage area: ${JSON.stringify(layout)}`)
-      assert(layout.sourceFitsSurface, `${fixture.key} whole source image was not contained by the ${mode} crop surface: ${JSON.stringify(layout)}`)
-      assert(Math.abs(layout.surfaceRatio - aspectRatio) <= Math.max(0.05, aspectRatio * 0.01), `${fixture.key} changed its ${mode} aspect ratio: ${JSON.stringify({ layout, aspectRatio })}`)
-      assert(layout.stageArea.height >= (mode === 'desktop' ? 500 : 400), `${fixture.key} did not receive an enlarged ${mode} working area: ${JSON.stringify(layout)}`)
-      if (fixture.key === 'landscape-16-9') {
-        assert(Math.abs(layout.surfaceWidth - layout.availableWidth) <= 4, `${fixture.key} did not use the available ${mode} width: ${JSON.stringify(layout)}`)
-      }
-      if (fixture.key === 'panorama-10-1') {
-        assert(Math.abs(layout.surfaceWidth - layout.availableWidth) <= 4, `${fixture.key} did not use the available ${mode} width: ${JSON.stringify(layout)}`)
-      }
-      await captureScreenshot(cdp, sessionId, `${fixture.key}-${mode}.png`)
-      caseResults[mode] = layout
-    }
-    results[fixture.key] = caseResults
-  }
-  return results
 }
 
 async function openDetails(cdp, sessionId, selector) {
@@ -1587,542 +1269,6 @@ async function restoreReadySource(cdp, sessionId, filePath, description, expecte
   return { before, ready }
 }
 
-async function runLoggedPr8Case(label, operation) {
-  try {
-    const evidence = await operation()
-    if (evidence?.skipped) {
-      console.log(`[PR8][SKIP] ${label}: ${evidence.reason}`)
-      return { evidence, label, status: 'skip' }
-    }
-    console.log(`[PR8][GREEN] ${label}`)
-    return { evidence, label, status: 'green' }
-  } catch (error) {
-    const message = error instanceof Error ? error.stack ?? error.message : String(error)
-    console.error(`[PR8][RED] ${label}: ${message}`)
-    return { error: message, label, status: 'red' }
-  }
-}
-
-async function runAspectAndGuideRegression({ cdp, sessionId }) {
-  const closedAdvancedState = await evaluate(cdp, sessionId, `(() => {
-    const details = document.querySelector('.advanced-controls')
-    const select = document.querySelector('#aspect-ratio')
-    const rect = select?.getBoundingClientRect()
-    return {
-      advancedOpen: details?.open ?? null,
-      inOutputCard: select?.closest('.output-card') !== null,
-      value: select?.value ?? '',
-      visible: Boolean(rect && rect.width > 0 && rect.height > 0),
-    }
-  })()`)
-  assert(closedAdvancedState.advancedOpen === false, `Aspect ratio control was not reachable with advanced controls closed: ${JSON.stringify(closedAdvancedState)}`)
-  assert(closedAdvancedState.inOutputCard && closedAdvancedState.visible, `Aspect ratio control was not moved next to output size: ${JSON.stringify(closedAdvancedState)}`)
-  assert(closedAdvancedState.value === 'original', `The initial aspect ratio preset changed unexpectedly: ${JSON.stringify(closedAdvancedState)}`)
-
-  const readAspectState = () => evaluate(cdp, sessionId, `(() => {
-    const readDimensions = (selector) => {
-      const text = document.querySelector(selector)?.textContent?.trim() ?? ''
-      const values = text.replace(' px', '').split(' × ').map(Number)
-      return values.length === 2 && values.every((value) => Number.isFinite(value))
-        ? { width: values[0], height: values[1] }
-        : null
-    }
-    const cropValues = [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value))
-    return {
-      aspect: document.querySelector('#aspect-ratio')?.value ?? '',
-      crop: cropValues.length === 4 && cropValues.every((value) => Number.isFinite(value))
-        ? { x: cropValues[0], y: cropValues[1], width: cropValues[2], height: cropValues[3] }
-        : null,
-      output: readDimensions('.effective-size strong'),
-      previewUrl: document.querySelector('.processed-preview')?.src ?? '',
-      rendered: readDimensions('.quick-preview-dimensions'),
-      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
-    }
-  })()`)
-
-  const aspectCases = [
-    { label: 'landscape', value: '4:3', ratio: 4 / 3 },
-    { label: 'portrait', value: '3:4', ratio: 3 / 4 },
-    { label: 'square', value: '1:1', ratio: 1 },
-  ]
-  const aspectResults = {}
-  for (const aspectCase of aspectCases) {
-    await setControlValue(cdp, sessionId, '#aspect-ratio', aspectCase.value)
-    const state = await waitFor(async () => {
-      const next = await readAspectState()
-      if (
-        next.aspect === aspectCase.value &&
-        next.status === 'プレビュー準備完了' &&
-        next.crop &&
-        next.output &&
-        next.rendered &&
-        next.previewUrl.startsWith('blob:') &&
-        next.output.width === next.rendered.width &&
-        next.output.height === next.rendered.height
-      ) {
-        return next
-      }
-      throw new Error(`Aspect regression state is not ready: ${JSON.stringify(next)}`)
-    }, `${aspectCase.label} aspect crop and output`)
-    const cropRatio = state.crop.width / state.crop.height
-    const outputRatio = state.output.width / state.output.height
-    assert(Math.abs(cropRatio - aspectCase.ratio) <= 0.02, `${aspectCase.label} crop ratio changed unexpectedly: ${JSON.stringify({ state, expected: aspectCase.ratio, actual: cropRatio })}`)
-    assert(Math.abs(outputRatio - aspectCase.ratio) <= 0.02, `${aspectCase.label} output ratio changed unexpectedly: ${JSON.stringify({ state, expected: aspectCase.ratio, actual: outputRatio })}`)
-    aspectResults[aspectCase.label] = {
-      crop: state.crop,
-      cropRatio,
-      output: state.output,
-      outputRatio,
-    }
-  }
-
-  await clickButton(cdp, sessionId, '編集をリセット')
-  await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === 'original' && [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '0,0,16,32' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the original full crop before guide regression')
-
-  const readGuideState = () => evaluate(cdp, sessionId, `(() => {
-    const guide = document.querySelector('.crop-guide')
-    const crop = document.querySelector('.crop-rectangle')
-    const guideRect = guide?.getBoundingClientRect()
-    const cropRect = crop?.getBoundingClientRect()
-    const style = guide ? getComputedStyle(guide) : null
-    return {
-      ariaHidden: guide?.getAttribute('aria-hidden') ?? null,
-      className: guide?.getAttribute('class') ?? '',
-      display: style?.display ?? null,
-      guideInsideCrop: Boolean(guideRect && cropRect &&
-        guideRect.left >= cropRect.left - 1 &&
-        guideRect.right <= cropRect.right + 1 &&
-        guideRect.top >= cropRect.top - 1 &&
-        guideRect.bottom <= cropRect.bottom + 1),
-      pointerEvents: style?.pointerEvents ?? null,
-      previewUrl: document.querySelector('.processed-preview')?.src ?? '',
-      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
-      value: document.querySelector('#composition-guide')?.value ?? '',
-      visible: Boolean(guideRect && guideRect.width > 0 && guideRect.height > 0 && style?.display !== 'none' && style?.visibility !== 'hidden'),
-    }
-  })()`)
-
-  const initialGuideState = await readGuideState()
-  assert(initialGuideState.value === 'thirds' && initialGuideState.visible, `Composition guide did not default to thirds: ${JSON.stringify(initialGuideState)}`)
-  const guidePreviewUrl = initialGuideState.previewUrl
-  const guideBaselinePixels = await capturePixelEvidence(cdp, sessionId)
-  const guideResults = {}
-  let guideScreenshot
-  for (const guideCase of [
-    { value: 'thirds', visible: true },
-    { value: 'golden', visible: true },
-    { value: 'diagonal', visible: true },
-    { value: 'none', visible: false },
-  ]) {
-    await setControlValue(cdp, sessionId, '#composition-guide', guideCase.value)
-    const state = await waitFor(async () => {
-      const next = await readGuideState()
-      if (next.value === guideCase.value && next.status === 'プレビュー準備完了' && next.previewUrl === guidePreviewUrl) {
-        return next
-      }
-      throw new Error(`Composition guide regression state is not ready: ${JSON.stringify(next)}`)
-    }, `${guideCase.value} composition guide without preview regeneration`)
-    assert(state.ariaHidden === 'true' && state.pointerEvents === 'none', `${guideCase.value} guide is not a passive accessible overlay: ${JSON.stringify(state)}`)
-    assert(state.visible === guideCase.visible, `${guideCase.value} guide visibility changed unexpectedly: ${JSON.stringify(state)}`)
-    if (guideCase.visible) {
-      assert(state.guideInsideCrop, `${guideCase.value} guide escaped the crop rectangle: ${JSON.stringify(state)}`)
-    }
-    if (guideCase.value === 'golden') {
-      guideScreenshot = await captureScreenshot(cdp, sessionId, 'composition-guide-golden.png')
-    }
-    guideResults[guideCase.value] = state
-  }
-
-  const guideAfterPixels = await capturePixelEvidence(cdp, sessionId)
-  assert(JSON.stringify(guideAfterPixels.crop) === JSON.stringify(guideBaselinePixels.crop), `Composition guides changed crop geometry: ${JSON.stringify({ before: guideBaselinePixels.crop, after: guideAfterPixels.crop })}`)
-  assert(guideAfterPixels.preview.width === guideBaselinePixels.preview.width && guideAfterPixels.preview.height === guideBaselinePixels.preview.height, `Composition guides changed export dimensions: ${JSON.stringify({ before: guideBaselinePixels.preview, after: guideAfterPixels.preview })}`)
-  assert(guideAfterPixels.preview.pixels.every((pixel, index) => pixel === guideBaselinePixels.preview.pixels[index]), 'Composition guides changed the rendered preview pixels.')
-  assert(guideAfterPixels.stageTransform === guideBaselinePixels.stageTransform, 'Composition guides changed the image transform.')
-
-  await setControlValue(cdp, sessionId, '#composition-guide', 'thirds')
-  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.processed-preview')?.src === ${JSON.stringify(guidePreviewUrl)}`, 'the default thirds guide after regression')
-
-  return {
-    aspectCases: aspectResults,
-    guideCases: guideResults,
-    screenshot: guideScreenshot,
-  }
-}
-
-async function dragCropRectangle(cdp, sessionId, direction) {
-  const points = await evaluate(cdp, sessionId, `(() => {
-    const surface = document.querySelector('.crop-surface')
-    const crop = document.querySelector('.crop-rectangle')
-    if (!(surface instanceof HTMLElement) || !(crop instanceof HTMLElement)) {
-      throw new Error('Crop surface or crop rectangle is missing.')
-    }
-    const surfaceRect = surface.getBoundingClientRect()
-    const cropRect = crop.getBoundingClientRect()
-    const start = {
-      x: (cropRect.left + cropRect.right) / 2,
-      y: (cropRect.top + cropRect.bottom) / 2,
-    }
-    const end = ${direction === 'right-bottom'
-      ? '{ x: surfaceRect.right - 1, y: surfaceRect.bottom - 1 }'
-      : '{ x: surfaceRect.left + 1, y: surfaceRect.top + 1 }'}
-    return {
-      end,
-      midpoint: {
-        x: (start.x + end.x) / 2,
-        y: (start.y + end.y) / 2,
-      },
-      start,
-    }
-  })()`)
-
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: points.start.x,
-    y: points.start.y,
-    button: 'none',
-    buttons: 0,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mousePressed',
-    x: points.start.x,
-    y: points.start.y,
-    button: 'left',
-    buttons: 1,
-    clickCount: 1,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: points.midpoint.x,
-    y: points.midpoint.y,
-    button: 'left',
-    buttons: 1,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: points.end.x,
-    y: points.end.y,
-    button: 'left',
-    buttons: 1,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: points.end.x,
-    y: points.end.y,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  }, sessionId)
-}
-
-async function resizeCropFromBottomRightWithMouse(cdp, sessionId, delta) {
-  const points = await evaluate(cdp, sessionId, `(() => {
-    const handle = document.querySelector('.crop-handle')
-    if (!(handle instanceof HTMLElement)) throw new Error('Crop resize handle is missing.')
-    const rect = handle.getBoundingClientRect()
-    const start = { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 }
-    const end = { x: start.x + ${Number(delta.x)}, y: start.y + ${Number(delta.y)} }
-    return {
-      end,
-      midpoint: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
-      start,
-      startTarget: document.elementFromPoint(start.x, start.y)?.className ?? '',
-    }
-  })()`)
-  assert(String(points.startTarget).split(' ').includes('crop-handle'), `The resize drag did not start on the crop handle: ${JSON.stringify(points)}`)
-
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: points.start.x,
-    y: points.start.y,
-    button: 'none',
-    buttons: 0,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mousePressed',
-    x: points.start.x,
-    y: points.start.y,
-    button: 'left',
-    buttons: 1,
-    clickCount: 1,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: points.midpoint.x,
-    y: points.midpoint.y,
-    button: 'left',
-    buttons: 1,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved',
-    x: points.end.x,
-    y: points.end.y,
-    button: 'left',
-    buttons: 1,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: points.end.x,
-    y: points.end.y,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  }, sessionId)
-  await delay(50)
-}
-
-async function setPanAndAssertCrop(cdp, sessionId, panX, panY, expectedCrop, description) {
-  const previousPreviewUrl = await evaluate(cdp, sessionId, "document.querySelector('.processed-preview')?.src ?? ''")
-  await setControlValue(cdp, sessionId, '#pan-x', panX)
-  await setControlValue(cdp, sessionId, '#pan-y', panY)
-  const expectedCoordinates = [expectedCrop.x, expectedCrop.y, expectedCrop.width, expectedCrop.height].join(',')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === ${JSON.stringify(expectedCoordinates)} && document.querySelector('#pan-x')?.value === ${JSON.stringify(String(panX))} && document.querySelector('#pan-y')?.value === ${JSON.stringify(String(panY))} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.processed-preview')?.src !== ${JSON.stringify(previousPreviewUrl)}`, description)
-  const pixels = await capturePixelEvidence(cdp, sessionId)
-  const pixelError = assertCropPixelEvidence(`${description} preview`, pixels)
-  assert(
-    pixels.crop.x === expectedCrop.x && pixels.crop.y === expectedCrop.y && pixels.crop.width === expectedCrop.width && pixels.crop.height === expectedCrop.height,
-    `${description} geometry was not adopted: ${JSON.stringify(pixels.crop)}`,
-  )
-  return { crop: pixels.crop, pixelError }
-}
-
-async function runCropDragBoundsRegression({ cdp, cropDragFixturePath, downloadDirectory, sessionId }) {
-  const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 1000
-    canvas.height = 600
-    const context = canvas.getContext('2d')
-    if (!context) throw new Error('Could not create a 2D canvas context for the crop drag fixture.')
-    const halfWidth = canvas.width / 2
-    const halfHeight = canvas.height / 2
-    const quadrants = [
-      ['#e63946', 0, 0, halfWidth, halfHeight],
-      ['#457b9d', halfWidth, 0, halfWidth, halfHeight],
-      ['#f4a261', 0, halfHeight, halfWidth, halfHeight],
-      ['#2a9d8f', halfWidth, halfHeight, halfWidth, halfHeight],
-    ]
-    for (const [color, x, y, width, height] of quadrants) {
-      context.fillStyle = color
-      context.fillRect(x, y, width, height)
-    }
-    return canvas.toDataURL('image/png')
-  })()`)
-  const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
-  assert(encodedFixture, 'Crop drag fixture did not encode as a PNG data URL.')
-  await writeFile(cropDragFixturePath, Buffer.from(encodedFixture, 'base64'))
-
-  await setFileInput(cdp, sessionId, cropDragFixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '1000 × 600 px'`, 'the crop drag regression source dimensions')
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag regression initial preview')
-  await evaluate(cdp, sessionId, `(() => {
-    const details = document.querySelector('.advanced-controls')
-    if (!(details instanceof HTMLDetailsElement)) throw new Error('Advanced crop controls are missing.')
-    if (!details.open) details.querySelector('summary')?.click()
-    return details.open
-  })()`)
-
-  await setControlValue(cdp, sessionId, '#aspect-ratio', 'free')
-  await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === 'free'`, 'the free crop aspect ratio')
-  const cropInputSelectors = [1, 2, 3, 4].map((index) => `.crop-coordinates label:nth-child(${index}) input`)
-  await setControlValue(cdp, sessionId, cropInputSelectors[0], 0)
-  await setControlValue(cdp, sessionId, cropInputSelectors[1], 0)
-  await setControlValue(cdp, sessionId, cropInputSelectors[2], 400)
-  await setControlValue(cdp, sessionId, cropInputSelectors[3], 300)
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('.effective-size strong')?.textContent?.trim() === '400 × 300 px'`, 'the left-aligned 400 x 300 crop')
-
-  await setControlValue(cdp, sessionId, cropInputSelectors[0], 100)
-  await setControlValue(cdp, sessionId, cropInputSelectors[1], 50)
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '100,50,400,300' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0'`, 'the off-center 400 x 300 crop for pan controls')
-
-  const offCenterPanControls = {
-    bottom: await setPanAndAssertCrop(cdp, sessionId, 0, 1, { x: 100, y: 300, width: 400, height: 300 }, 'off-center bottom pan endpoint'),
-    left: await setPanAndAssertCrop(cdp, sessionId, -1, 0, { x: 0, y: 50, width: 400, height: 300 }, 'off-center left pan endpoint'),
-    intermediate: await setPanAndAssertCrop(cdp, sessionId, 0.25, -0.4, { x: 225, y: 30, width: 400, height: 300 }, 'off-center intermediate pan'),
-    neutral: await setPanAndAssertCrop(cdp, sessionId, 0, 0, { x: 100, y: 50, width: 400, height: 300 }, 'off-center neutral pan'),
-    right: await setPanAndAssertCrop(cdp, sessionId, 1, 0, { x: 600, y: 50, width: 400, height: 300 }, 'off-center right pan endpoint'),
-    top: await setPanAndAssertCrop(cdp, sessionId, 0, -1, { x: 100, y: 0, width: 400, height: 300 }, 'off-center top pan endpoint'),
-  }
-
-  await setControlValue(cdp, sessionId, '#zoom', '2')
-  const zoomedPanControls = {
-    bottom: await setPanAndAssertCrop(cdp, sessionId, 0, 1, { x: 200, y: 450, width: 200, height: 150 }, 'zoomed bottom pan endpoint'),
-    left: await setPanAndAssertCrop(cdp, sessionId, -1, 0, { x: 0, y: 125, width: 200, height: 150 }, 'zoomed left pan endpoint'),
-    intermediate: await setPanAndAssertCrop(cdp, sessionId, 0.25, -0.4, { x: 350, y: 75, width: 200, height: 150 }, 'zoomed intermediate pan'),
-    neutral: await setPanAndAssertCrop(cdp, sessionId, 0, 0, { x: 200, y: 125, width: 200, height: 150 }, 'zoomed neutral pan'),
-    right: await setPanAndAssertCrop(cdp, sessionId, 1, 0, { x: 800, y: 125, width: 200, height: 150 }, 'zoomed right pan endpoint'),
-    top: await setPanAndAssertCrop(cdp, sessionId, 0, -1, { x: 200, y: 0, width: 200, height: 150 }, 'zoomed top pan endpoint'),
-  }
-
-  await setControlValue(cdp, sessionId, '#zoom', '1')
-  await setPanAndAssertCrop(cdp, sessionId, 0, 0, { x: 100, y: 50, width: 400, height: 300 }, 'off-center neutral pan after zoom reset')
-  await setControlValue(cdp, sessionId, cropInputSelectors[0], 0)
-  await setControlValue(cdp, sessionId, cropInputSelectors[1], 0)
-  await setControlValue(cdp, sessionId, cropInputSelectors[2], 400)
-  await setControlValue(cdp, sessionId, cropInputSelectors[3], 300)
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('#zoom')?.value === '1' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0'`, 'the left-aligned crop restored before pointer dragging')
-
-  await setControlValue(cdp, sessionId, cropInputSelectors[0], 200)
-  await setControlValue(cdp, sessionId, cropInputSelectors[1], 100)
-  await setControlValue(cdp, sessionId, cropInputSelectors[2], 300)
-  await setControlValue(cdp, sessionId, cropInputSelectors[3], 200)
-  await setControlValue(cdp, sessionId, cropInputSelectors[2], 30)
-  await setControlValue(cdp, sessionId, cropInputSelectors[3], 20)
-  await dragCropRectangle(cdp, sessionId, 'right-bottom')
-  await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '970,580,30,20'`, 'the tiny crop moved without resizing')
-  for (const viewport of [MOBILE_VIEWPORT, DESKTOP_VIEWPORT]) {
-    await setViewport(cdp, sessionId, viewport)
-    await setControlValue(cdp, sessionId, cropInputSelectors[2], 1)
-    await setControlValue(cdp, sessionId, cropInputSelectors[3], 1)
-    await setControlValue(cdp, sessionId, cropInputSelectors[0], 999)
-    await setControlValue(cdp, sessionId, cropInputSelectors[1], 599)
-    await evaluate(cdp, sessionId, "document.querySelector('.crop-handle').scrollIntoView({ block: 'center' })")
-    const target = await evaluate(cdp, sessionId, `(() => {
-      const handle = document.querySelector('.crop-handle')
-      const rect = handle.getBoundingClientRect()
-      const crop = document.querySelector('.crop-rectangle').getBoundingClientRect()
-      const stage = document.querySelector('.stage-area').getBoundingClientRect()
-      return {
-        width: rect.width, height: rect.height,
-        outsideCrop: rect.left >= crop.right - 1 && rect.top >= crop.bottom - 1,
-        insideStage: rect.right <= stage.right + 1 && rect.bottom <= stage.bottom + 1,
-        clickable: document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === handle,
-      }
-    })()`)
-    assert(target.width >= 44 && target.height >= 44 && target.outsideCrop && target.insideStage && target.clickable, `The 1px edge crop lost its full-size resize target: ${JSON.stringify({ viewport, target })}`)
-    await setControlValue(cdp, sessionId, cropInputSelectors[0], 200)
-    await setControlValue(cdp, sessionId, cropInputSelectors[1], 100)
-    await resizeCropFromBottomRightWithMouse(cdp, sessionId, { x: 20, y: 20 })
-    const resized = await evaluate(cdp, sessionId, "[...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value))")
-    assert(resized[0] === 200 && resized[1] === 100 && resized[2] > 1 && resized[3] > 1, `The 1px crop could not be resized: ${JSON.stringify(resized)}`)
-  }
-
-  await setControlValue(cdp, sessionId, cropInputSelectors[0], 200)
-  await setControlValue(cdp, sessionId, cropInputSelectors[1], 100)
-  await setControlValue(cdp, sessionId, cropInputSelectors[2], 300)
-  await setControlValue(cdp, sessionId, cropInputSelectors[3], 200)
-  const anchoredInitial = await waitFor(async () => {
-    const crop = await evaluate(cdp, sessionId, `(() => [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value)))()`)
-    if (JSON.stringify(crop) === JSON.stringify([200, 100, 300, 200])) return crop
-    throw new Error(`The anchored resize starting crop was not adopted: ${JSON.stringify(crop)}`)
-  }, 'the anchored resize starting crop')
-  await resizeCropFromBottomRightWithMouse(cdp, sessionId, { x: 80, y: 60 })
-  const anchoredExpanded = await waitFor(async () => {
-    const crop = await evaluate(cdp, sessionId, `(() => [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value)))()`)
-    if (crop[0] === 200 && crop[1] === 100 && crop[2] > anchoredInitial[2] && crop[3] > anchoredInitial[3]) return crop
-    throw new Error(`The real mouse resize did not preserve the top-left anchor while expanding: ${JSON.stringify(crop)}`)
-  }, 'the anchored resize expansion')
-  await resizeCropFromBottomRightWithMouse(cdp, sessionId, { x: -40, y: -30 })
-  const anchoredShrunk = await waitFor(async () => {
-    const crop = await evaluate(cdp, sessionId, `(() => [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value)))()`)
-    if (crop[0] === 200 && crop[1] === 100 && crop[2] < anchoredExpanded[2] && crop[3] < anchoredExpanded[3] && crop[2] > 0 && crop[3] > 0) return crop
-    throw new Error(`The real mouse resize did not preserve the top-left anchor while shrinking: ${JSON.stringify(crop)}`)
-  }, 'the anchored resize contraction')
-  await setControlValue(cdp, sessionId, cropInputSelectors[0], 0)
-  await setControlValue(cdp, sessionId, cropInputSelectors[1], 0)
-  await setControlValue(cdp, sessionId, cropInputSelectors[2], 400)
-  await setControlValue(cdp, sessionId, cropInputSelectors[3], 300)
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '0,0,400,300'`, 'the crop restored after anchored resize')
-
-  await dragCropRectangle(cdp, sessionId, 'right-bottom')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.effective-size strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag to the right and bottom bounds')
-  const rightEdgePixels = await capturePixelEvidence(cdp, sessionId)
-  const rightEdgePixelError = assertCropPixelEvidence('right-bottom crop preview', rightEdgePixels)
-  assert(rightEdgePixels.crop.x === 600 && rightEdgePixels.crop.y === 300 && rightEdgePixels.crop.width === 400 && rightEdgePixels.crop.height === 300, `Right-bottom crop geometry was not adopted: ${JSON.stringify(rightEdgePixels.crop)}`)
-  assert(rightEdgePixels.preview.width === 400 && rightEdgePixels.preview.height === 300, `Right-bottom output dimensions were unexpected: ${JSON.stringify(rightEdgePixels.preview)}`)
-  const rightEdgeScreenshot = await captureScreenshot(cdp, sessionId, 'crop-right-bound.png')
-
-  await clickButton(cdp, sessionId, 'ダウンロード')
-  const downloadedFilename = 'e2e-crop-drag-edited.jpg'
-  const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
-  const outputBytes = new Uint8Array(await readFile(downloadedPath))
-  const outputDimensions = parseJpegDimensions(outputBytes)
-  assert(outputDimensions.width === 400 && outputDimensions.height === 300, `Right-bottom downloaded output dimensions were ${outputDimensions.width}x${outputDimensions.height}, expected 400x300.`)
-
-  await dragCropRectangle(cdp, sessionId, 'left-top')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '0,0,400,300' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the crop drag back to the left and top bounds')
-  const leftEdgePixels = await capturePixelEvidence(cdp, sessionId)
-  const leftEdgePixelError = assertCropPixelEvidence('left-top crop preview', leftEdgePixels)
-  assert(leftEdgePixels.crop.x === 0 && leftEdgePixels.crop.y === 0 && leftEdgePixels.crop.width === 400 && leftEdgePixels.crop.height === 300, `Left-top crop geometry was not adopted after reversal: ${JSON.stringify(leftEdgePixels.crop)}`)
-  assert(leftEdgePixels.preview.width === 400 && leftEdgePixels.preview.height === 300, `Left-top output dimensions after reversal were unexpected: ${JSON.stringify(leftEdgePixels.preview)}`)
-
-  await dragCropRectangle(cdp, sessionId, 'right-bottom')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '600,300,400,300' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '400 × 300 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated crop drag to the right and bottom bounds')
-  const repeatedRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
-  const repeatedRightEdgePixelError = assertCropPixelEvidence('repeated right-bottom crop preview', repeatedRightEdgePixels)
-
-  await setControlValue(cdp, sessionId, cropInputSelectors[0], 100)
-  await setControlValue(cdp, sessionId, cropInputSelectors[1], 50)
-  await setControlValue(cdp, sessionId, cropInputSelectors[2], 400)
-  await setControlValue(cdp, sessionId, cropInputSelectors[3], 300)
-  await setControlValue(cdp, sessionId, '#zoom', '2')
-  await setControlValue(cdp, sessionId, '#pan-x', '0.25')
-  await setControlValue(cdp, sessionId, '#pan-y', '-0.4')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '350,75,200,150' && document.querySelector('#zoom')?.value === '2' && document.querySelector('#pan-x')?.value === '0.25' && document.querySelector('#pan-y')?.value === '-0.4' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the off-center zoomed crop before pointer dragging')
-  const zoomScreenshot = await captureScreenshot(cdp, sessionId, 'crop-zoomed-off-center.png')
-
-  await dragCropRectangle(cdp, sessionId, 'right-bottom')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('#zoom')?.value === '1' && document.querySelector('#pan-x')?.value === '0' && document.querySelector('#pan-y')?.value === '0' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the zoomed crop drag to the right and bottom bounds')
-  const zoomRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
-  const zoomRightEdgePixelError = assertCropPixelEvidence('zoomed right-bottom crop preview', zoomRightEdgePixels)
-
-  await dragCropRectangle(cdp, sessionId, 'left-top')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '0,0,200,150' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the reversed zoomed crop drag to the left and top bounds')
-  const zoomLeftEdgePixels = await capturePixelEvidence(cdp, sessionId)
-  const zoomLeftEdgePixelError = assertCropPixelEvidence('zoomed left-top crop preview', zoomLeftEdgePixels)
-
-  await dragCropRectangle(cdp, sessionId, 'right-bottom')
-  await waitForDom(cdp, sessionId, `[
-    ...document.querySelectorAll('.crop-coordinates input'),
-  ].map((input) => input.value).join(',') === '800,450,200,150' && document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim() === '200 × 150 px' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the repeated zoomed crop drag to the right and bottom bounds')
-  const repeatedZoomRightEdgePixels = await capturePixelEvidence(cdp, sessionId)
-  const repeatedZoomRightEdgePixelError = assertCropPixelEvidence('repeated zoomed right-bottom crop preview', repeatedZoomRightEdgePixels)
-
-  return {
-    anchoredResize: {
-      expanded: anchoredExpanded,
-      initial: anchoredInitial,
-      shrunk: anchoredShrunk,
-    },
-    leftEdge: leftEdgePixels.crop,
-    output: outputDimensions,
-    panControls: { offCenter: offCenterPanControls, zoomed: zoomedPanControls },
-    repeatedRightEdge: repeatedRightEdgePixels.crop,
-    rightEdge: rightEdgePixels.crop,
-    pixelEvidence: {
-      leftEdge: leftEdgePixelError,
-      repeatedRightEdge: repeatedRightEdgePixelError,
-      repeatedZoomRightEdge: repeatedZoomRightEdgePixelError,
-      rightEdge: rightEdgePixelError,
-      zoomLeftEdge: zoomLeftEdgePixelError,
-      zoomRightEdge: zoomRightEdgePixelError,
-    },
-    screenshots: { rightBound: rightEdgeScreenshot, zoomedOffCenter: zoomScreenshot },
-    zoomLeftEdge: zoomLeftEdgePixels.crop,
-    zoomRightEdge: zoomRightEdgePixels.crop,
-  }
-}
-
 async function setFileInput(cdp, sessionId, filePath) {
   const documentResult = await cdp.send('DOM.getDocument', { depth: -1, pierce: true }, sessionId)
   const queryResult = await cdp.send('DOM.querySelector', {
@@ -2215,927 +1361,6 @@ async function waitForDownloadedFile(downloadDirectory, filename) {
   return filePath
 }
 
-function mapDisplayPixelToSource(
-  sourceSize,
-  crop,
-  rotation,
-  flipHorizontal,
-  flipVertical,
-  outputX,
-  outputY,
-  outputSize,
-  horizontalBeforeRotation = false,
-) {
-  const displaySize = rotation === 90 || rotation === 270
-    ? { width: sourceSize.height, height: sourceSize.width }
-    : sourceSize
-  let displayX = crop.x + Math.floor(outputX * crop.width / outputSize.width)
-  let displayY = crop.y + Math.floor(outputY * crop.height / outputSize.height)
-
-  if (horizontalBeforeRotation) {
-    if (flipVertical) {
-      displayY = displaySize.height - 1 - displayY
-    }
-  } else {
-    if (flipHorizontal) {
-      displayX = displaySize.width - 1 - displayX
-    }
-    if (flipVertical) {
-      displayY = displaySize.height - 1 - displayY
-    }
-  }
-
-  let sourceX
-  let sourceY
-  switch (rotation) {
-    case 0:
-      sourceX = displayX
-      sourceY = displayY
-      break
-    case 90:
-      sourceX = displayY
-      sourceY = sourceSize.height - 1 - displayX
-      break
-    case 180:
-      sourceX = sourceSize.width - 1 - displayX
-      sourceY = sourceSize.height - 1 - displayY
-      break
-    case 270:
-      sourceX = sourceSize.width - 1 - displayY
-      sourceY = displayX
-      break
-    default:
-      throw new Error(`Unsupported E2E rotation: ${rotation}`)
-  }
-
-  if (horizontalBeforeRotation && flipHorizontal) {
-    sourceX = sourceSize.width - 1 - sourceX
-  }
-  return { x: sourceX, y: sourceY }
-}
-
-function computeExpectedPixels(source, crop, state, outputSize, horizontalBeforeRotation = false) {
-  const expected = new Uint8ClampedArray(outputSize.width * outputSize.height * 4)
-  for (let outputY = 0; outputY < outputSize.height; outputY += 1) {
-    for (let outputX = 0; outputX < outputSize.width; outputX += 1) {
-      const sourcePoint = mapDisplayPixelToSource(
-        { width: source.width, height: source.height },
-        crop,
-        state.rotation,
-        state.flipHorizontal,
-        state.flipVertical,
-        outputX,
-        outputY,
-        outputSize,
-        horizontalBeforeRotation,
-      )
-      const sourceOffset = (sourcePoint.y * source.width + sourcePoint.x) * 4
-      const outputOffset = (outputY * outputSize.width + outputX) * 4
-      expected[outputOffset] = source.pixels[sourceOffset]
-      expected[outputOffset + 1] = source.pixels[sourceOffset + 1]
-      expected[outputOffset + 2] = source.pixels[sourceOffset + 2]
-      expected[outputOffset + 3] = source.pixels[sourceOffset + 3]
-    }
-  }
-  return expected
-}
-
-function summarizePixelError(actual, expected) {
-  assert(actual.length === expected.length, `Pixel buffer lengths differ: ${actual.length} vs ${expected.length}.`)
-  let totalAbsoluteError = 0
-  let maximumChannelError = 0
-  let pixelsOverTolerance = 0
-  const pixelCount = actual.length / 4
-  for (let offset = 0; offset < actual.length; offset += 4) {
-    let pixelAbsoluteError = 0
-    for (let channel = 0; channel < 3; channel += 1) {
-      const absoluteError = Math.abs(actual[offset + channel] - expected[offset + channel])
-      totalAbsoluteError += absoluteError
-      pixelAbsoluteError += absoluteError
-      maximumChannelError = Math.max(maximumChannelError, absoluteError)
-    }
-    if (pixelAbsoluteError / 3 > 48) {
-      pixelsOverTolerance += 1
-    }
-  }
-  return {
-    meanAbsoluteRgbError: totalAbsoluteError / (pixelCount * 3),
-    maximumChannelError,
-    pixelsOver48Fraction: pixelsOverTolerance / pixelCount,
-  }
-}
-
-function assertJpegPixelEvidence(label, actual, expected) {
-  // JPEG quality 0.57 is lossy: allow RGB MAE <= 28 and <=30% of pixels above
-  // a per-pixel RGB error of 48, while preserving the mapping-level evidence.
-  const error = summarizePixelError(actual, expected)
-  assert(
-    error.meanAbsoluteRgbError <= 28 && error.pixelsOver48Fraction <= 0.3,
-    `${label} exceeded the documented JPEG tolerance: ${JSON.stringify(error)}`,
-  )
-  return error
-}
-
-function assertCropPixelEvidence(label, evidence) {
-  const expected = computeExpectedPixels(
-    evidence.source,
-    evidence.crop,
-    { rotation: 0, flipHorizontal: false, flipVertical: false },
-    evidence.preview,
-  )
-  return assertJpegPixelEvidence(
-    label,
-    new Uint8ClampedArray(evidence.preview.pixels),
-    expected,
-  )
-}
-
-function assertMappingSeparation(label, expectedError, wrongMappingError) {
-  assert(
-    wrongMappingError.meanAbsoluteRgbError >= expectedError.meanAbsoluteRgbError + 20,
-    `${label} did not separate the wrong mapping: expected=${JSON.stringify(expectedError)}, wrong=${JSON.stringify(wrongMappingError)}`,
-  )
-}
-
-async function capturePixelEvidence(cdp, sessionId) {
-  return evaluate(cdp, sessionId, `(() => {
-    const loadImage = (url) => new Promise((resolvePromise, reject) => {
-      const image = new Image()
-      image.onload = () => resolvePromise(image)
-      image.onerror = () => reject(new Error('E2E image decode failed: ' + url))
-      image.src = url
-    })
-    const drawPixels = async (url) => {
-      const image = await loadImage(url)
-      const width = image.naturalWidth
-      const height = image.naturalHeight
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const context = canvas.getContext('2d', { willReadFrequently: true })
-      if (!context) throw new Error('E2E temporary canvas context is unavailable.')
-      context.drawImage(image, 0, 0, width, height)
-      return { width, height, pixels: Array.from(context.getImageData(0, 0, width, height).data) }
-    }
-    const sourceImage = document.querySelector('.stage-image')
-    const previewImage = document.querySelector('.processed-preview')
-    if (!sourceImage?.src || !previewImage?.src) throw new Error('E2E source or Worker preview image is missing.')
-    const cropValues = [...document.querySelectorAll('.crop-coordinates input')].map((input) => Number(input.value))
-    return Promise.all([drawPixels(sourceImage.src), drawPixels(previewImage.src)]).then(([source, preview]) => ({
-      crop: { x: cropValues[0], y: cropValues[1], width: cropValues[2], height: cropValues[3] },
-      preview,
-      source,
-      stageTransform: sourceImage.style.transform,
-    }))
-  })()`)
-}
-
-async function readComparisonState(cdp, sessionId) {
-  return evaluate(cdp, sessionId, `(() => {
-    const describe = (selector) => {
-      const element = document.querySelector(selector)
-      if (!element) return null
-      const rect = element.getBoundingClientRect()
-      const style = getComputedStyle(element)
-      return {
-        bottom: rect.bottom,
-        height: rect.height,
-        left: rect.left,
-        right: rect.right,
-        top: rect.top,
-        width: rect.width,
-        visibility: style.visibility,
-        visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
-      }
-    }
-    const result = document.querySelector('.comparison-result-image')
-    const selected = [...document.querySelectorAll('.comparison-mode-button')]
-      .find((button) => button.getAttribute('aria-pressed') === 'true')
-    const viewport = document.querySelector('.comparison-viewport')
-    const canvas = document.querySelector('.comparison-canvas')
-    return {
-      canvas: describe('.comparison-canvas'),
-      comparisonMode: selected?.getAttribute('data-comparison-mode') ?? '',
-      comparisonModeLabel: selected?.textContent?.trim() ?? '',
-      crop: describe('.crop-rectangle'),
-      divider: describe('.comparison-divider'),
-      dividerStyle: document.querySelector('.comparison-divider') ? getComputedStyle(document.querySelector('.comparison-divider')).left : '',
-      fullButton: {
-        disabled: document.querySelector('.verify-output-button')?.hasAttribute('disabled') ?? true,
-        text: document.querySelector('.verify-output-button')?.textContent?.trim() ?? '',
-      },
-      originalClipPath: document.querySelector('.comparison-original-layer')
-        ? getComputedStyle(document.querySelector('.comparison-original-layer')).clipPath
-        : '',
-      originalLayer: describe('.comparison-original-layer'),
-      pendingMaskCount: document.querySelectorAll('.stage-area .processed-preview-pending').length,
-      processedInCropCount: document.querySelectorAll('.stage-area .processed-preview').length,
-      resultImage: result ? {
-        ...describe('.comparison-result-image'),
-        dataKind: result.getAttribute('data-preview-kind') ?? '',
-        naturalHeight: result instanceof HTMLImageElement ? result.naturalHeight : 0,
-        naturalWidth: result instanceof HTMLImageElement ? result.naturalWidth : 0,
-        outputBytes: Number(result.getAttribute('data-output-bytes')),
-      } : null,
-      resultLayer: describe('.comparison-result-layer'),
-      split: Number(document.querySelector('#comparison-split')?.value),
-      viewport: describe('.comparison-viewport'),
-      viewportBackground: viewport ? {
-        color: getComputedStyle(viewport).backgroundColor,
-        image: getComputedStyle(viewport).backgroundImage,
-      } : null,
-      viewportScroll: viewport ? {
-        clientHeight: viewport.clientHeight,
-        clientWidth: viewport.clientWidth,
-        scrollHeight: viewport.scrollHeight,
-        scrollWidth: viewport.scrollWidth,
-      } : null,
-      qualityHelp: document.querySelector('#quality-help')?.textContent?.trim() ?? '',
-      qualityLabel: document.querySelector('label[for="quality"]')?.textContent?.trim() ?? '',
-      qualityRect: describe('#quality'),
-      noHorizontalOverflow: document.documentElement.scrollWidth <= window.innerWidth + 1 && document.body.scrollWidth <= window.innerWidth + 1,
-      source: describe('.stage-image'),
-      sourceVisibility: document.querySelector('.stage-image') ? getComputedStyle(document.querySelector('.stage-image')).visibility : '',
-      viewportIsActual: document.querySelector('.comparison-viewport')?.classList.contains('is-actual') ?? false,
-      inspectionActualDisabled: document.querySelector('.comparison-inspection-button[aria-pressed="true"]')?.textContent?.trim() === '100%表示'
-        ? document.querySelector('.comparison-inspection-button[aria-pressed="true"]')?.hasAttribute('disabled') ?? true
-        : document.querySelector('.comparison-inspection-button')?.parentElement?.querySelector('button:last-of-type')?.hasAttribute('disabled') ?? true,
-      inspectionMode: [...document.querySelectorAll('.comparison-inspection-button')]
-        .find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent?.trim() ?? '',
-      viewportElement: Boolean(canvas),
-    }
-  })()`)
-}
-
-function assertComparisonRectsAligned(state, description) {
-  const target = state.canvas ?? state.viewport
-  assert(target && state.originalLayer && state.resultImage, `${description} is missing comparison geometry: ${JSON.stringify(state)}`)
-  const aligned = (rect) => Math.abs(rect.left - target.left) <= 1 &&
-    Math.abs(rect.right - target.right) <= 1 &&
-    Math.abs(rect.top - target.top) <= 1 &&
-    Math.abs(rect.bottom - target.bottom) <= 1
-  assert(aligned(state.originalLayer), `${description} original layer is not aligned: ${JSON.stringify({ target, original: state.originalLayer })}`)
-  assert(aligned(state.resultImage), `${description} result image is not aligned: ${JSON.stringify({ target, result: state.resultImage })}`)
-}
-
-async function activateComparisonModeWithMouse(cdp, sessionId, mode) {
-  const point = await evaluate(cdp, sessionId, `(() => {
-    const button = document.querySelector(${JSON.stringify(`[data-comparison-mode="${mode}"]`)})
-    if (!(button instanceof HTMLElement)) throw new Error('Comparison mode button is missing: ' + ${JSON.stringify(mode)})
-    button.scrollIntoView({ block: 'center', inline: 'nearest' })
-    const rect = button.getBoundingClientRect()
-    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 }
-  })()`)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mousePressed',
-    x: point.x,
-    y: point.y,
-    button: 'left',
-    buttons: 1,
-    clickCount: 1,
-  }, sessionId)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseReleased',
-    x: point.x,
-    y: point.y,
-    button: 'left',
-    buttons: 0,
-    clickCount: 1,
-  }, sessionId)
-}
-
-async function dispatchComparisonKey(cdp, sessionId, mode, key) {
-  const focusState = await evaluate(cdp, sessionId, `(() => {
-    const button = document.querySelector(${JSON.stringify(`[data-comparison-mode="${mode}"]`)})
-    if (!(button instanceof HTMLElement)) throw new Error('Comparison mode button is missing for keyboard input: ' + ${JSON.stringify(mode)})
-    button.focus()
-    return {
-      active: document.activeElement === button,
-      mode: button.getAttribute('data-comparison-mode') ?? '',
-    }
-  })()`)
-  assert(focusState.active === true && focusState.mode === mode, `Comparison mode button did not receive keyboard focus: ${JSON.stringify(focusState)}`)
-  const code = key === ' ' ? 'Space' : 'Enter'
-  const keyCode = key === ' ' ? 32 : 13
-  await cdp.send('Input.dispatchKeyEvent', {
-    type: 'keyDown',
-    key,
-    code,
-    text: key === ' ' ? ' ' : '\r',
-    unmodifiedText: key === ' ' ? ' ' : '\r',
-    windowsVirtualKeyCode: keyCode,
-    nativeVirtualKeyCode: keyCode,
-  }, sessionId)
-  await cdp.send('Input.dispatchKeyEvent', {
-    type: 'keyUp',
-    key,
-    code,
-    windowsVirtualKeyCode: keyCode,
-    nativeVirtualKeyCode: keyCode,
-  }, sessionId)
-}
-
-async function runComparisonPersistenceRegression({ cdp, sessionId }) {
-  await clickButton(cdp, sessionId, '編集をリセット')
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the comparison regression reset preview')
-  await setControlValue(cdp, sessionId, '#aspect-ratio', '1:1')
-  await clickButton(cdp, sessionId, '右へ90°')
-  await clickButton(cdp, sessionId, '左右反転')
-  await clickButton(cdp, sessionId, '上下反転')
-  await setControlValue(cdp, sessionId, '#resize-width', '12')
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.comparison-result-image')?.getAttribute('data-preview-kind') === 'quick'`, 'the aligned transformed comparison preview')
-
-  await activateComparisonModeWithMouse(cdp, sessionId, 'original')
-  await waitForDom(cdp, sessionId, `document.querySelector('[data-comparison-mode="original"]')?.getAttribute('aria-pressed') === 'true'`, 'a persistent mouse comparison click')
-  const mouseState = await readComparisonState(cdp, sessionId)
-  assert(mouseState.comparisonMode === 'original' && mouseState.resultImage?.visibility === 'hidden', `Mouse comparison click did not persist: ${JSON.stringify(mouseState)}`)
-  await evaluate(cdp, sessionId, 'window.dispatchEvent(new Event("blur"))')
-  const blurState = await readComparisonState(cdp, sessionId)
-  assert(blurState.comparisonMode === 'original', `Window blur changed the selected comparison mode: ${JSON.stringify(blurState)}`)
-
-  await activateComparisonModeWithMouse(cdp, sessionId, 'compare')
-  await dispatchComparisonKey(cdp, sessionId, 'original', 'Enter')
-  await waitForDom(cdp, sessionId, `document.querySelector('[data-comparison-mode="original"]')?.getAttribute('aria-pressed') === 'true'`, 'keyboard Enter comparison selection')
-  await dispatchComparisonKey(cdp, sessionId, 'compare', ' ')
-  await waitForDom(cdp, sessionId, `document.querySelector('[data-comparison-mode="compare"]')?.getAttribute('aria-pressed') === 'true'`, 'keyboard Space comparison selection')
-
-  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the mobile comparison controls viewport')
-  await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
-  const touchPoint = await evaluate(cdp, sessionId, `(() => {
-    const button = document.querySelector('[data-comparison-mode="result"]')
-    if (!(button instanceof HTMLElement)) throw new Error('Comparison result button is missing for touch input.')
-    const rect = button.getBoundingClientRect()
-    return { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 }
-  })()`)
-  await cdp.send('Input.dispatchTouchEvent', {
-    type: 'touchStart',
-    touchPoints: [{ id: 1, x: touchPoint.x, y: touchPoint.y, radiusX: 4, radiusY: 4, force: 1 }],
-  }, sessionId)
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sessionId)
-  await waitForDom(cdp, sessionId, `document.querySelector('[data-comparison-mode="result"]')?.getAttribute('aria-pressed') === 'true'`, 'touch comparison selection')
-  const mobileState = await readComparisonState(cdp, sessionId)
-  assert(mobileState.noHorizontalOverflow, `Mobile comparison controls overflow horizontally: ${JSON.stringify(mobileState)}`)
-  assert(mobileState.qualityRect?.height >= 44 && mobileState.qualityRect?.width > 0, `Mobile save-quality control is not usable beside comparison: ${JSON.stringify(mobileState)}`)
-
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop comparison controls viewport')
-  await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
-  await activateComparisonModeWithMouse(cdp, sessionId, 'compare')
-
-  const gate = await installWorkerProcessGate(cdp, sessionId)
-  assert(gate?.installed, 'Could not install the comparison pending Worker gate.')
-  let pendingState
-  try {
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-    await setControlValue(cdp, sessionId, '#quality', '0.56')
-    await waitFor(async () => {
-      const held = await readWorkerProcessGate(cdp, sessionId)
-      if (held?.held) return held
-      throw new Error(`Comparison pending Worker gate is not holding: ${JSON.stringify(held)}`)
-    }, 'the comparison pending Worker request')
-    pendingState = await readComparisonState(cdp, sessionId)
-    assert(pendingState.source?.visible && pendingState.crop?.visible, `Crop editor disappeared during preview regeneration: ${JSON.stringify(pendingState)}`)
-    assert(pendingState.processedInCropCount === 0 && pendingState.pendingMaskCount === 0, `Encoded output or an opaque pending mask covered crop editing: ${JSON.stringify(pendingState)}`)
-  } finally {
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.remove()').catch(() => {})
-  }
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.comparison-result-image')?.getAttribute('data-preview-kind') === 'quick'`, 'the comparison preview after pending regeneration')
-  const pendingCompleted = await readComparisonState(cdp, sessionId)
-  assert(pendingCompleted.comparisonMode === 'compare', `Preview regeneration changed the selected comparison mode: ${JSON.stringify(pendingCompleted)}`)
-
-  const splitResults = {}
-  for (const split of [0, 100, 50]) {
-    await setControlValue(cdp, sessionId, '#comparison-split', split)
-    const state = await waitFor(async () => {
-      const next = await readComparisonState(cdp, sessionId)
-      if (next.split === split && next.comparisonMode === 'compare') return next
-      throw new Error(`Comparison split has not reached ${split}: ${JSON.stringify(next)}`)
-    }, `comparison split ${split}%`)
-    assertComparisonRectsAligned(state, `comparison split ${split}%`)
-    if (split === 0) {
-      assert(state.originalClipPath.includes('100%'), `The 0% split did not hide the original side: ${JSON.stringify(state)}`)
-      assert(Math.abs(state.divider.left - state.viewport.left) <= 1, `The 0% divider is not at the left endpoint: ${JSON.stringify(state)}`)
-    }
-    if (split === 100) {
-      assert(state.originalClipPath.includes('0%'), `The 100% split did not show the original side: ${JSON.stringify(state)}`)
-      assert(Math.abs(state.divider.right - state.viewport.right) <= 1, `The 100% divider is not at the right endpoint: ${JSON.stringify(state)}`)
-    }
-    splitResults[split] = state
-  }
-
-  await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
-  const desktopScreenshot = await captureScreenshot(cdp, sessionId, 'comparison-desktop.png')
-  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the mobile comparison screenshot viewport')
-  await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
-  const mobileScreenshot = await captureScreenshot(cdp, sessionId, 'comparison-mobile.png')
-  const screenshotState = await readComparisonState(cdp, sessionId)
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after comparison screenshots')
-  await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
-
-  await clickButton(cdp, sessionId, '編集をリセット')
-  await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === 'original' && [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '0,0,16,32' && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the comparison regression cleanup preview')
-
-  return {
-    blurState,
-    desktopScreenshot,
-    mobileScreenshot,
-    mobileState,
-    mouseState,
-    pendingState,
-    pendingCompleted,
-    screenshotState,
-    splitResults,
-  }
-}
-
-async function assertFitComparison(cdp, sessionId, ratio) {
-  const size = await evaluate(cdp, sessionId, `(() => {
-    const viewport = document.querySelector('.comparison-viewport')
-    const canvas = document.querySelector('.comparison-canvas').getBoundingClientRect()
-    return { width: viewport.clientWidth, height: viewport.clientHeight, canvasWidth: canvas.width, canvasHeight: canvas.height }
-  })()`)
-  assert(size.width > 0 && size.height > 0 && Math.abs(size.width / size.height - ratio) < 0.02, `Fit comparison lost its crop ratio: ${JSON.stringify({ size, ratio })}`)
-  assert(Math.abs(size.canvasWidth - size.width) < 2 && Math.abs(size.canvasHeight - size.height) < 2, `Fit comparison clips its canvas: ${JSON.stringify(size)}`)
-}
-
-async function runFullOutputComparisonRegression({ cdp, cropDragFixturePath, downloadDirectory, fixturePath, sessionId }) {
-  await restoreReadySource(cdp, sessionId, cropDragFixturePath, 'full-size comparison source', '1000 × 600 px')
-  await clickButton(cdp, sessionId, '比較')
-  const quick = await waitFor(async () => {
-    const state = await readComparisonState(cdp, sessionId)
-    if (state.resultImage?.dataKind === 'quick' && state.resultImage.naturalWidth === 960 && state.resultImage.naturalHeight === 576) {
-      return state
-    }
-    throw new Error(`The reduced comparison preview is not ready: ${JSON.stringify(state)}`)
-  }, 'the reduced 960px comparison preview')
-  assert(quick.resultImage.naturalWidth <= 960 && quick.resultImage.naturalHeight < 600, `The quick comparison preview was not reduced: ${JSON.stringify(quick)}`)
-  assert(await evaluate(cdp, sessionId, "document.querySelector('.quick-preview-dimensions')?.textContent?.trim()") === '960 × 576 px', `Quick preview metrics do not describe the reduced image: ${JSON.stringify(quick)}`)
-  assert(await evaluate(cdp, sessionId, "document.querySelector('.full-output-dimensions')?.textContent?.trim()") === '未確認', 'Full output was claimed before explicit confirmation.')
-  assertComparisonRectsAligned(quick, 'quick comparison alignment')
-
-  const workerGate = await installWorkerProcessGate(cdp, sessionId)
-  const debounceGate = await installPreviewDebounceGate(cdp, sessionId)
-  assert(workerGate?.installed && debounceGate?.installed, 'Could not install the full-output busy/error gates.')
-  let full
-  let fullBusyErrorRegression
-  let desktopScreenshot
-  let mobileScreenshot
-  try {
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-    await clickButton(cdp, sessionId, '保存サイズを確認')
-    const heldFull = await waitFor(async () => {
-      const state = await readComparisonState(cdp, sessionId)
-      const fullDimensions = await evaluate(cdp, sessionId, "document.querySelector('.full-output-dimensions')?.textContent?.trim()")
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      if (gate?.held && state.fullButton.disabled && state.fullButton.text.includes('確認中') && fullDimensions === '未確認') {
-        return { fullDimensions, gate, state }
-      }
-      throw new Error(`The full-size confirmation was not held with its button disabled: ${JSON.stringify({ fullDimensions, gate, state })}`)
-    }, 'the held full-size confirmation', PR8_ASSERTION_TIMEOUT_MS)
-    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.injectError("E2E full-size confirmation failure")') === true, 'The held full-size confirmation did not accept the injected error.')
-    const failedFull = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const comparison = await readComparisonState(cdp, sessionId)
-      const fullDimensions = await evaluate(cdp, sessionId, "document.querySelector('.full-output-dimensions')?.textContent?.trim()")
-      if (state.error === 'E2E full-size confirmation failure' && state.status === 'エラー' && state.busy === false && state.pending === false && comparison.fullButton.disabled === false && comparison.resultImage?.dataKind === 'quick' && fullDimensions === '未確認') {
-        return { comparison, fullDimensions, state }
-      }
-      throw new Error(`The failed full-size confirmation did not retain the quick result: ${JSON.stringify({ comparison, fullDimensions, state })}`)
-    }, 'the failed full-size confirmation fallback', PR8_ASSERTION_TIMEOUT_MS)
-
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-    await clickButton(cdp, sessionId, '保存サイズを確認')
-    const retryHeld = await waitFor(async () => {
-      const state = await readComparisonState(cdp, sessionId)
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      if (gate?.held && state.fullButton.disabled && state.fullButton.text.includes('確認中')) return { gate, state }
-      throw new Error(`The full-size confirmation retry was not held as busy: ${JSON.stringify({ gate, state })}`)
-    }, 'the retry full-size confirmation', PR8_ASSERTION_TIMEOUT_MS)
-    await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.payload.worker.addEventListener('message', (event) => {
-      window.__e2eConfirmedBytes = event.data.blob.arrayBuffer().then((buffer) => Array.from(new Uint8Array(buffer)))
-    }, { once: true })`)
-    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The full-size confirmation retry was not released.')
-    full = await waitFor(async () => {
-      const state = await readComparisonState(cdp, sessionId)
-      const fullDimensions = await evaluate(cdp, sessionId, "document.querySelector('.full-output-dimensions')?.textContent?.trim()")
-      if (state.resultImage?.dataKind === 'full' && state.resultImage.naturalWidth === 1000 && state.resultImage.naturalHeight === 600 && fullDimensions === '1000 × 600 px') {
-        return { ...state, fullDimensions }
-      }
-      throw new Error(`The full-size comparison result is not ready after retry: ${JSON.stringify({ state, fullDimensions })}`)
-    }, 'the full-size encoded comparison result after retry', PR8_ASSERTION_TIMEOUT_MS)
-
-    assert(full.resultImage.naturalWidth > 960, `The full comparison still uses a reduced image: ${JSON.stringify(full)}`)
-    assert(full.resultImage.outputBytes > 0, `The full comparison has no encoded byte metric: ${JSON.stringify(full)}`)
-    assert(await evaluate(cdp, sessionId, "document.querySelector('.quick-preview-dimensions')?.textContent?.trim()") === '960 × 576 px', `Quick preview metrics were overwritten by full output metrics: ${JSON.stringify(full)}`)
-    assert(await evaluate(cdp, sessionId, "document.querySelector('.full-output-bytes-value')?.textContent?.trim()") !== '未確認', `Full output byte metrics were not published: ${JSON.stringify(full)}`)
-    const reportedFullBytes = await evaluate(cdp, sessionId, "Number(document.querySelector('.comparison-result-image')?.getAttribute('data-output-bytes'))")
-    assert(reportedFullBytes === full.resultImage.outputBytes, `Full output byte metrics changed between the Worker result and comparison image: ${JSON.stringify({ full, reportedFullBytes })}`)
-    assertComparisonRectsAligned(full, 'full-size comparison alignment')
-    await assertFitComparison(cdp, sessionId, 1000 / 600)
-    await clickButton(cdp, sessionId, '100%表示')
-    const actualInspection = await waitFor(async () => {
-      const state = await readComparisonState(cdp, sessionId)
-      if (state.inspectionMode === '100%表示' && state.viewportIsActual && state.canvas?.width === 1000 && state.canvas?.height === 600 && state.resultImage?.width === 1000 && state.resultImage?.height === 600 && state.viewportScroll?.scrollWidth >= 1000 && state.viewportScroll?.scrollHeight >= 600) return state
-      throw new Error(`The 100% full-size comparison does not expose the real output rectangle: ${JSON.stringify(state)}`)
-    }, 'the 100% full-size comparison rectangle', PR8_ASSERTION_TIMEOUT_MS)
-    assertComparisonRectsAligned(actualInspection, '100% full-size comparison alignment')
-    await clickButton(cdp, sessionId, '全体表示')
-    await waitForDom(cdp, sessionId, `document.querySelector('.comparison-inspection-button[aria-pressed="true"]')?.textContent?.trim() === '全体表示'`, 'the fit comparison after 100% inspection')
-    await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
-    await assertFitComparison(cdp, sessionId, 1000 / 600)
-    desktopScreenshot = await captureScreenshot(cdp, sessionId, 'comparison-full-desktop.png')
-    await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
-    await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the mobile full-size comparison viewport')
-    await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
-    await assertFitComparison(cdp, sessionId, 1000 / 600)
-    mobileScreenshot = await captureScreenshot(cdp, sessionId, 'comparison-full-mobile.png')
-    await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-    await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after full-size comparison')
-    await evaluate(cdp, sessionId, 'window.scrollTo(0, 0)')
-
-    const confirmedBytes = await evaluate(cdp, sessionId, 'window.__e2eConfirmedBytes')
-    const cachedDownloadPath = join(downloadDirectory, 'e2e-crop-drag-edited.jpg')
-    await rm(cachedDownloadPath, { force: true })
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-    await clickButton(cdp, sessionId, 'ダウンロード')
-    assert(!(await readWorkerProcessGate(cdp, sessionId)).held, 'Downloading a confirmed result submitted another Worker request.')
-    await waitForDownloadedFile(downloadDirectory, 'e2e-crop-drag-edited.jpg')
-    assert((await readFile(cachedDownloadPath)).equals(Buffer.from(confirmedBytes)), 'Downloaded bytes differ from the confirmed full-size image.')
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm(); delete window.__e2eConfirmedBytes')
-
-    const staleQualityBefore = await readPr8State(cdp, sessionId)
-    const staleQuality = Math.abs(staleQualityBefore.quality - 0.63) < 0.001 ? 0.74 : 0.63
-    await clickButton(cdp, sessionId, '編集をリセット')
-    await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the full-output stale completion baseline reset')
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm(); window.__e2ePreviewDebounceGate.arm()')
-    await clickButton(cdp, sessionId, '保存サイズを確認')
-    const staleHeld = await waitFor(async () => {
-      const state = await readComparisonState(cdp, sessionId)
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      if (gate?.held && state.fullButton.disabled && state.fullButton.text.includes('確認中')) return { gate, state }
-      throw new Error(`The stale full-size request was not held: ${JSON.stringify({ gate, state })}`)
-    }, 'the stale full-size request', PR8_ASSERTION_TIMEOUT_MS)
-    await setControlValue(cdp, sessionId, '#quality', staleQuality)
-    const staleBusy = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const comparison = await readComparisonState(cdp, sessionId)
-      const debounce = await readPreviewDebounceGate(cdp, sessionId)
-      if (debounce?.held && state.quality === staleQuality && state.busy && state.pending && comparison.fullButton.disabled && comparison.resultImage === null) {
-        return { comparison, debounce, state }
-      }
-      throw new Error(`The edited preview did not disable full confirmation during debounce: ${JSON.stringify({ comparison, debounce, state })}`)
-    }, 'the disabled full confirmation during stale preview debounce', PR8_ASSERTION_TIMEOUT_MS)
-    assert(await evaluate(cdp, sessionId, 'window.__e2ePreviewDebounceGate.release()') === true, 'The stale preview debounce was not released.')
-    const currentQuick = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const comparison = await readComparisonState(cdp, sessionId)
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      const fullDimensions = await evaluate(cdp, sessionId, "document.querySelector('.full-output-dimensions')?.textContent?.trim()")
-      if (gate?.held && state.quality === staleQuality && state.status === 'プレビュー準備完了' && state.busy === false && state.pending === false && comparison.resultImage?.dataKind === 'quick' && fullDimensions === '未確認') {
-        return { comparison, fullDimensions, state }
-      }
-      throw new Error(`The edited quick preview did not settle while the old full request remained held: ${JSON.stringify({ comparison, fullDimensions, gate, state })}`)
-    }, 'the current quick preview before stale full completion', PR8_ASSERTION_TIMEOUT_MS)
-    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The stale full-size request was not released.')
-    const staleFull = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const comparison = await readComparisonState(cdp, sessionId)
-      const fullDimensions = await evaluate(cdp, sessionId, "document.querySelector('.full-output-dimensions')?.textContent?.trim()")
-      if (state.quality === staleQuality && comparison.resultImage?.dataKind === 'quick' && fullDimensions === '未確認' && state.status === 'プレビュー準備完了' && state.busy === false) {
-        return { comparison, fullDimensions, state }
-      }
-      throw new Error(`A stale full-size completion replaced the edited quick result: ${JSON.stringify({ comparison, fullDimensions, state })}`)
-    }, 'the ignored stale full-size completion', PR8_ASSERTION_TIMEOUT_MS)
-    fullBusyErrorRegression = { actualInspection, failedFull, heldFull, retryHeld, staleBusy, staleFull, staleHeld, currentQuick }
-
-    const beforeRestore = await readPr8State(cdp, sessionId)
-    await dispatchFileDrop(cdp, sessionId, '.change-image-button', fixturePath, 'e2e-metadata-fixture-replacement.jpg')
-    await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(beforeRestore.sourceUrl)}`, 'the named source after full-size comparison')
-    await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.quick-preview-dimensions')?.textContent?.trim() === '16 × 32 px'`, 'the replacement preview after full-size comparison')
-    await assertFitComparison(cdp, sessionId, 0.5)
-  } finally {
-    await evaluate(cdp, sessionId, 'window.__e2ePreviewDebounceGate.disarm()').catch(() => {})
-    await evaluate(cdp, sessionId, 'window.__e2ePreviewDebounceGate.remove()').catch(() => {})
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.remove()').catch(() => {})
-  }
-
-  return {
-    desktopScreenshot,
-    full,
-    fullBusyErrorRegression,
-    mobileScreenshot,
-    quick,
-  }
-}
-
-async function runCorruptReplacementRegression({ cdp, corruptFixturePath, downloadDirectory, sessionId, unsupportedFixturePath }) {
-  const before = await evaluate(cdp, sessionId, `(() => ({
-    crop: [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value),
-    previewUrl: document.querySelector('.processed-preview')?.src ?? '',
-    sourceUrl: document.querySelector('.stage-image')?.src ?? '',
-  }))()`)
-  assert(before.previewUrl.startsWith('blob:') && before.sourceUrl.startsWith('blob:'), `The corrupt replacement regression has no stable source/preview URLs: ${JSON.stringify(before)}`)
-
-  const waitForRetainedPreview = async (filePath, description) => {
-    await setFileInput(cdp, sessionId, filePath)
-    return waitFor(async () => {
-    const state = await evaluate(cdp, sessionId, `(() => ({
-      busy: document.querySelector('.status-chip')?.classList.contains('is-busy') ?? false,
-      crop: [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value),
-      downloadDisabled: document.querySelector('.download-button')?.disabled ?? true,
-      error: document.querySelector('.error-message')?.textContent?.trim() ?? '',
-      pending: document.querySelector('.processed-preview-pending') !== null,
-      previewUrl: document.querySelector('.processed-preview')?.src ?? '',
-      sourceUrl: document.querySelector('.stage-image')?.src ?? '',
-      status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
-    }))()`)
-    if (
-      state.error.length > 0 &&
-      (state.status === 'プレビュー準備完了' || state.status === 'エラー') &&
-      state.busy === false &&
-      state.pending === false &&
-      state.downloadDisabled === false &&
-      state.previewUrl === before.previewUrl &&
-      state.sourceUrl === before.sourceUrl &&
-      JSON.stringify(state.crop) === JSON.stringify(before.crop)
-    ) {
-      return state
-    }
-      throw new Error(`${description} has not retained the previous usable result: ${JSON.stringify(state)}`)
-    }, description, PR8_ASSERTION_TIMEOUT_MS)
-  }
-
-  const restored = await waitForRetainedPreview(corruptFixturePath, 'the previous preview after corrupt replacement')
-  const unsupportedRestored = await waitForRetainedPreview(unsupportedFixturePath, 'the previous preview after unsupported replacement')
-
-  await clickButton(cdp, sessionId, 'ダウンロード')
-  const downloadedFilename = 'e2e-metadata-fixture-edited.jpg'
-  const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
-  const downloadedBytes = new Uint8Array(await readFile(downloadedPath))
-  assert(downloadedBytes.length > 0, `The download after corrupt replacement was empty: ${downloadedFilename}`)
-
-  return {
-    before,
-    downloadedBytes: downloadedBytes.length,
-    downloadedFilename: basename(downloadedPath),
-    restored,
-    unsupportedRestored,
-  }
-}
-
-async function readAccessibleStageImages(cdp, sessionId) {
-  try {
-    const result = await cdp.send('Accessibility.getFullAXTree', { depth: -1 }, sessionId)
-    return {
-      images: (result.nodes ?? [])
-        .filter((node) => node.ignored !== true && node.role?.value === 'image')
-        .map((node) => ({ name: node.name?.value ?? '', nodeId: node.nodeId })),
-      supported: true,
-    }
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : String(error),
-      images: [],
-      supported: false,
-    }
-  }
-}
-
-async function runAccessibilityOcclusionRegression({ cdp, fixturePath, sessionId }) {
-  await restoreReadySource(cdp, sessionId, fixturePath, 'AX ownership baseline', '16 × 32 px')
-  await activateComparisonModeWithMouse(cdp, sessionId, 'compare')
-  const labels = await evaluate(cdp, sessionId, `(() => ({
-    original: document.querySelector('.comparison-original-image')?.getAttribute('alt') ?? '',
-    processed: document.querySelector('.comparison-result-image')?.getAttribute('alt') ?? '',
-    stage: document.querySelector('.stage-image')?.getAttribute('alt') ?? '',
-  }))()`)
-  assert(labels.original.length > 0 && labels.processed.length > 0 && labels.stage.length > 0, `Accessibility labels are missing from the comparison images: ${JSON.stringify(labels)}`)
-
-  const readMode = async (mode) => waitFor(async () => {
-    const ax = await readAccessibleStageImages(cdp, sessionId)
-    if (!ax.supported) {
-      return ax
-    }
-    const names = ax.images.map((image) => image.name)
-    const expected = mode === 'compare'
-      ? [labels.stage, labels.original, labels.processed]
-      : mode === 'original' || mode === 'pending'
-        ? [labels.stage, labels.original]
-        : [labels.stage, labels.processed]
-    const hidden = mode === 'compare'
-      ? []
-      : mode === 'original' || mode === 'pending'
-        ? [labels.processed]
-        : [labels.original]
-    if (expected.every((label) => names.includes(label)) && hidden.every((label) => !names.includes(label))) {
-      return ax
-    }
-    throw new Error(`AX ${mode} comparison image ownership is not settled: ${JSON.stringify({ ax, expected, hidden })}`)
-  }, `the ${mode} AX image ownership`, PR8_ASSERTION_TIMEOUT_MS)
-
-  const compared = await readMode('compare')
-  if (!compared.supported) {
-    return { compared, reason: `CDP Accessibility.getFullAXTree unavailable: ${compared.error}`, skipped: true }
-  }
-
-  try {
-    const baseline = await readPr8State(cdp, sessionId)
-    const nextQuality = Math.abs(baseline.quality - 0.57) < 0.001 ? 0.71 : 0.57
-    assert(baseline.status === 'プレビュー準備完了' && baseline.busy === false && baseline.pending === false && baseline.previewUrl.startsWith('blob:'), `AX ownership baseline is not a completed preview: ${JSON.stringify(baseline)}`)
-    assert(await readWorkerProcessGate(cdp, sessionId), 'The Worker process gate was not installed for pending AX ownership.')
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-    await setControlValue(cdp, sessionId, '#quality', nextQuality)
-    const pending = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      if (gate?.held && state.busy && state.pending && state.previewUrl === '' && state.sourceUrl === baseline.sourceUrl && state.downloadDisabled) {
-        return { gate, state }
-      }
-      throw new Error(`AX pending ownership was not held without a completed result: ${JSON.stringify({ baseline, gate, state })}`)
-    }, 'the pending AX ownership state', PR8_ASSERTION_TIMEOUT_MS)
-    const pendingComparison = await readComparisonState(cdp, sessionId)
-    assert(pendingComparison.source?.visible && pendingComparison.crop?.visible && pendingComparison.processedInCropCount === 0 && pendingComparison.pendingMaskCount === 0, `The pending comparison covered the separate crop editor: ${JSON.stringify({ pending, pendingComparison })}`)
-    const pendingAx = await readMode('pending')
-    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.injectError("E2E AX pending encode failure")') === true, 'The pending AX Worker request did not accept the injected error.')
-    const failed = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      if (state.error === 'E2E AX pending encode failure' && state.status === 'エラー' && state.busy === false && state.pending === false && state.previewUrl === '' && state.sourceUrl === baseline.sourceUrl && state.downloadDisabled) {
-        return state
-      }
-      throw new Error(`AX error fallback did not settle with the committed source: ${JSON.stringify({ baseline, pending, state })}`)
-    }, 'the AX error fallback state', PR8_ASSERTION_TIMEOUT_MS)
-    const failedComparison = await readComparisonState(cdp, sessionId)
-    assert(failedComparison.source?.visible && failedComparison.crop?.visible && failedComparison.processedInCropCount === 0, `The error fallback did not preserve the separate crop editor: ${JSON.stringify({ failed, failedComparison })}`)
-    const failedAx = await readMode('pending')
-
-    const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'AX ownership restore', '16 × 32 px')
-    await activateComparisonModeWithMouse(cdp, sessionId, 'compare')
-    const restoredAx = await readMode('compare')
-    assert(restored.ready.error === '' && restored.ready.busy === false && restored.ready.pending === false && restored.ready.previewUrl.startsWith('blob:'), `AX ownership restore did not return to a completed preview: ${JSON.stringify(restored)}`)
-
-    await activateComparisonModeWithMouse(cdp, sessionId, 'original')
-    const original = await readMode('original')
-    await activateComparisonModeWithMouse(cdp, sessionId, 'result')
-    const result = await readMode('result')
-    return { compared, failed, failedAx, labels, original, pending, pendingAx, result, restored, restoredAx }
-  } finally {
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-  }
-}
-
-async function runNoopOutputInvalidationRegression({ cdp, fixturePath, selector, sessionId, valueKey, label }) {
-  const restored = await restoreReadySource(cdp, sessionId, fixturePath, `${label} baseline`, '16 × 32 px')
-  const before = restored.ready
-  const value = valueKey === 'quality' ? before.quality : before.outputMime
-  assert(valueKey === 'quality' ? Number.isFinite(value) : value.length > 0, `${label} has no current control value: ${JSON.stringify(before)}`)
-  await setControlValue(cdp, sessionId, selector, value)
-  const after = await waitFor(async () => {
-    const state = await readPr8State(cdp, sessionId)
-    if (
-      state.sourceUrl === before.sourceUrl &&
-      state.previewUrl === before.previewUrl &&
-      state.status === 'プレビュー準備完了' &&
-      state.busy === false &&
-      state.pending === false &&
-      state.downloadDisabled === false
-    ) {
-      return state
-    }
-    throw new Error(`${label} invalidated a result despite an unchanged value: ${JSON.stringify({ before, after: state })}`)
-  }, `${label} to preserve the completed result`, PR8_ASSERTION_TIMEOUT_MS)
-  return { after, before, value }
-}
-
-async function runCancelledExportSelectionRegression({ candidateFixturePath, cdp, downloadDirectory, expectedSourceDimensions, fixturePath, sessionId }) {
-  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'cancelled export baseline', '16 × 32 px')
-  const baseline = restored.ready
-  const filesBefore = (await readdir(downloadDirectory)).sort()
-  try {
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-    await clickButton(cdp, sessionId, 'ダウンロード')
-    const heldExport = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      if (gate?.held && state.busy && state.downloadDisabled && state.previewUrl === baseline.previewUrl && state.pending === false) {
-        return { gate, state }
-      }
-      throw new Error(`Export was not held with the retained preview: ${JSON.stringify({ baseline, gate, state })}`)
-    }, 'the held export before candidate selection', PR8_ASSERTION_TIMEOUT_MS)
-
-    await setFileInput(cdp, sessionId, candidateFixturePath)
-    let outcome
-    if (expectedSourceDimensions) {
-      const committed = await waitFor(async () => {
-        const state = await readPr8State(cdp, sessionId)
-        if (state.sourceUrl !== baseline.sourceUrl && state.sourceDimensions === expectedSourceDimensions) {
-          return state
-        }
-        throw new Error(`Successful candidate has not committed after export cancellation: ${JSON.stringify({ baseline, state })}`)
-      }, 'the successful candidate commit after export cancellation', PR8_ASSERTION_TIMEOUT_MS)
-      const released = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()')
-      assert(released === true, 'The cancelled export was not released from the Worker gate.')
-      const ready = await waitFor(async () => {
-        const state = await readPr8State(cdp, sessionId)
-        if (state.status === 'プレビュー準備完了' && state.busy === false && state.pending === false && state.previewUrl.startsWith('blob:') && state.sourceUrl === committed.sourceUrl && state.sourceDimensions === expectedSourceDimensions) {
-          return state
-        }
-        throw new Error(`Successful candidate did not settle after cancelling export: ${JSON.stringify({ committed, state })}`)
-      }, 'the successful candidate preview after export cancellation', PR8_ASSERTION_TIMEOUT_MS)
-      outcome = { committed, heldExport, ready }
-    } else {
-      const failed = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-        if (state.error.length > 0 && hasUsablePreview(state) && state.previewUrl === baseline.previewUrl && state.sourceUrl === baseline.sourceUrl) {
-          return state
-        }
-        throw new Error(`Failed candidate has not settled with the retained export preview: ${JSON.stringify({ baseline, state })}`)
-      }, 'the failed candidate after export cancellation', PR8_ASSERTION_TIMEOUT_MS)
-      const released = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()')
-      assert(released === true, 'The cancelled export for a failed candidate was not released from the Worker gate.')
-      const afterRelease = await waitFor(async () => {
-        const state = await readPr8State(cdp, sessionId)
-        if (state.error === failed.error && hasUsablePreview(state) && state.previewUrl === baseline.previewUrl && state.sourceUrl === baseline.sourceUrl) {
-          return state
-        }
-        throw new Error(`Cancelled export changed the retained result after failed candidate completion: ${JSON.stringify({ failed, state })}`)
-      }, 'the retained preview after releasing the cancelled failed export', PR8_ASSERTION_TIMEOUT_MS)
-      outcome = { failed, heldExport, afterRelease }
-    }
-
-    const filesAfter = (await readdir(downloadDirectory)).sort()
-    assert(JSON.stringify(filesAfter) === JSON.stringify(filesBefore), `Candidate selection produced a cancelled export download: ${JSON.stringify({ filesBefore, filesAfter })}`)
-    return outcome
-  } finally {
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-  }
-}
-
-async function runCancelledExportEditRegression({ cdp, downloadDirectory, fixturePath, sessionId }) {
-  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'cancelled export edit baseline', '16 × 32 px')
-  const baseline = restored.ready
-  const filesBefore = (await readdir(downloadDirectory)).sort()
-  try {
-    const nextQuality = Math.abs(baseline.quality - 0.57) < 0.001 ? 0.71 : 0.57
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-    await clickButton(cdp, sessionId, 'ダウンロード')
-    const heldExport = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      if (gate?.held && state.busy && state.downloadDisabled && state.previewUrl === baseline.previewUrl && state.pending === false) {
-        return { gate, state }
-      }
-      throw new Error(`Export was not held before edit: ${JSON.stringify({ baseline, gate, state })}`)
-    }, 'the held export before edit', PR8_ASSERTION_TIMEOUT_MS)
-
-    await setControlValue(cdp, sessionId, '#quality', nextQuality)
-    const readyBeforeRelease = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const gate = await readWorkerProcessGate(cdp, sessionId)
-      if (
-        gate?.held &&
-        state.quality === nextQuality &&
-        state.status === 'プレビュー準備完了' &&
-        state.busy === false &&
-        state.pending === false &&
-        state.previewUrl.startsWith('blob:') &&
-        state.previewUrl !== baseline.previewUrl &&
-        state.sourceUrl === baseline.sourceUrl &&
-        state.downloadDisabled === false
-      ) {
-        return state
-      }
-      throw new Error(`The current edited preview was not ready while the old export remained held: ${JSON.stringify({ baseline, heldExport, gate, state })}`)
-    }, 'the ready edited preview before releasing the old export', PR8_ASSERTION_TIMEOUT_MS)
-
-    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The obsolete export was not released after the edited preview became ready.')
-    const afterRelease = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      if (
-        state.quality === nextQuality &&
-        state.status === 'プレビュー準備完了' &&
-        state.busy === false &&
-        state.pending === false &&
-        state.previewUrl === readyBeforeRelease.previewUrl &&
-        state.sourceUrl === readyBeforeRelease.sourceUrl &&
-        state.downloadDisabled === false
-      ) {
-        return state
-      }
-      throw new Error(`Releasing the obsolete export changed the current edited preview: ${JSON.stringify({ readyBeforeRelease, state })}`)
-    }, 'the unchanged edited preview after releasing the old export', PR8_ASSERTION_TIMEOUT_MS)
-    const filesAfter = (await readdir(downloadDirectory)).sort()
-    assert(JSON.stringify(filesAfter) === JSON.stringify(filesBefore), `The obsolete export produced a download after edit: ${JSON.stringify({ filesBefore, filesAfter })}`)
-    return { afterRelease, baseline, heldExport, readyBeforeRelease }
-  } finally {
-    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-  }
-}
-
 async function runLatestCandidateOrderingRegression({ cdp, cropDragFixturePath, decodeSupported, fixturePath, sessionId }) {
   if (!decodeSupported) {
     return { reason: 'createImageBitmap is unavailable for the deterministic decode gate.', skipped: true }
@@ -3178,56 +1403,6 @@ async function runLatestCandidateOrderingRegression({ cdp, cropDragFixturePath, 
   }
 }
 
-async function runComparisonCommitRegression({ cdp, cropDragFixturePath, fixturePath, sessionId }) {
-  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'comparison commit baseline', '16 × 32 px')
-  const baseline = restored.ready
-  try {
-    await activateComparisonModeWithMouse(cdp, sessionId, 'original')
-    await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.arm()')
-    await setFileInput(cdp, sessionId, cropDragFixturePath)
-    const heldDecode = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const gate = await readDecodeGate(cdp, sessionId)
-      if (gate?.held && state.busy && state.downloadDisabled && state.sourceUrl === baseline.sourceUrl && state.previewUrl === baseline.previewUrl && state.pending === false) {
-        return { gate, state }
-      }
-      throw new Error(`Candidate decode was not held against the committed preview before comparison: ${JSON.stringify({ baseline, gate, state })}`)
-    }, 'the held candidate decode before comparison press', PR8_ASSERTION_TIMEOUT_MS)
-
-    const pendingComparison = await readComparisonState(cdp, sessionId)
-    assert(pendingComparison.comparisonMode === 'original' && pendingComparison.resultLayer?.visibility === 'hidden', `Candidate decode changed the persistent original comparison: ${JSON.stringify({ heldDecode, pendingComparison })}`)
-    assert(pendingComparison.source?.visible && pendingComparison.crop?.visible && pendingComparison.processedInCropCount === 0 && pendingComparison.pendingMaskCount === 0, `Candidate decode covered the separate crop editor: ${JSON.stringify({ heldDecode, pendingComparison })}`)
-
-    assert(await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.release()') === true, 'The candidate decode was not released after pressing comparison.')
-    const committed = await waitFor(async () => {
-      const state = await readPr8State(cdp, sessionId)
-      const comparison = await readComparisonState(cdp, sessionId)
-      if (
-        state.sourceUrl !== baseline.sourceUrl &&
-        state.sourceDimensions === '1000 × 600 px' &&
-        state.status === 'プレビュー準備完了' &&
-        state.busy === false &&
-        state.pending === false &&
-        state.previewUrl.startsWith('blob:') &&
-        comparison.comparisonMode === 'original' &&
-        comparison.resultLayer?.visibility === 'hidden' &&
-        comparison.source?.visible &&
-        comparison.crop?.visible &&
-        comparison.processedInCropCount === 0 &&
-        comparison.pendingMaskCount === 0
-      ) {
-        return { comparison, state }
-      }
-      throw new Error(`Candidate commit did not preserve the selected comparison and separate crop editor: ${JSON.stringify({ baseline, heldDecode, comparison, state })}`)
-    }, 'the compressed default after candidate commit releases comparison', PR8_ASSERTION_TIMEOUT_MS)
-    await activateComparisonModeWithMouse(cdp, sessionId, 'compare')
-    const compared = await readComparisonState(cdp, sessionId)
-    assert(compared.comparisonMode === 'compare' && compared.resultImage?.visible, `Candidate commit did not expose the new comparison result: ${JSON.stringify({ committed, compared })}`)
-    return { baseline, committed, compared, heldDecode, pendingComparison }
-  } finally {
-    await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.held ? window.__e2eDecodeGate.release() : false').catch(() => {})
-  }
-}
 
 async function runFailedEncodeSettlementRegression({ cdp, fixturePath, sessionId }) {
   const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'injected encode failure baseline', '16 × 32 px')
@@ -3446,7 +1621,7 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
       throw new Error(`Edit did not produce a held preview while decode was pending: ${JSON.stringify({ gate, state })}`)
     }, 'the held edit preview before reset', PR8_ASSERTION_TIMEOUT_MS)
 
-    await clickButton(cdp, sessionId, '編集をリセット')
+    await clickButton(cdp, sessionId, 'リセット')
     await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '0,0,16,32'`, 'the reset edit state while decode and Worker work are pending')
     assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The held edit Worker request was not released after reset.')
     assert(await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.release()') === true, 'The held replacement decode was not released after reset.')
@@ -3465,670 +1640,460 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
   }
 }
 
-async function runTinyCropComparisonRegression({ cdp, cropDragFixturePath, fixturePath, sessionId }) {
-  await restoreReadySource(cdp, sessionId, cropDragFixturePath, 'tiny crop source', '1000 × 600 px')
+async function runCancelledExportSelectionRegression({ candidateFixturePath, cdp, downloadDirectory, expectedSourceDimensions, fixturePath, sessionId }) {
+  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'cancelled export baseline', '16 × 32 px')
+  const baseline = restored.ready
+  const filesBefore = (await readdir(downloadDirectory)).sort()
   try {
-    await openDetails(cdp, sessionId, '.advanced-controls')
-    await setControlValue(cdp, sessionId, '#aspect-ratio', 'free')
-    const cropInputSelectors = [1, 2, 3, 4].map((index) => `.crop-coordinates label:nth-child(${index}) input`)
-    const readLayout = () => evaluate(cdp, sessionId, `(() => {
-      const describe = (selector) => {
-        const element = document.querySelector(selector)
-        if (!element) return null
-        const rect = element.getBoundingClientRect()
-        const style = getComputedStyle(element)
-        return {
-          bottom: rect.bottom,
-          height: rect.height,
-          left: rect.left,
-          minHeight: style.minHeight,
-          minWidth: style.minWidth,
-          right: rect.right,
-          top: rect.top,
-          visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
-          width: rect.width,
+    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
+    await clickButton(cdp, sessionId, '保存 .')
+    const heldExport = await waitFor(async () => {
+      const state = await readPr8State(cdp, sessionId)
+      const gate = await readWorkerProcessGate(cdp, sessionId)
+      if (gate?.held && state.busy && state.downloadDisabled && state.previewUrl === baseline.previewUrl && state.pending === false) {
+        return { gate, state }
+      }
+      throw new Error(`Export was not held with the retained preview: ${JSON.stringify({ baseline, gate, state })}`)
+    }, 'the held export before candidate selection', PR8_ASSERTION_TIMEOUT_MS)
+
+    await setFileInput(cdp, sessionId, candidateFixturePath)
+    let outcome
+    if (expectedSourceDimensions) {
+      const committed = await waitFor(async () => {
+        const state = await readPr8State(cdp, sessionId)
+        if (state.sourceUrl !== baseline.sourceUrl && state.sourceDimensions === expectedSourceDimensions) {
+          return state
         }
-      }
-      return {
-        crop: describe('.crop-rectangle'),
-        guide: describe('.crop-guide'),
-        mask: {
-          bottom: describe('.crop-shade-bottom'),
-          left: describe('.crop-shade-left'),
-          right: describe('.crop-shade-right'),
-          top: describe('.crop-shade-top'),
-        },
-        comparison: {
-          canvas: describe('.comparison-canvas'),
-          empty: describe('.comparison-empty'),
-          original: describe('.comparison-original-layer'),
-          result: describe('.comparison-result-image'),
-          viewport: describe('.comparison-viewport'),
-        },
-        stageProcessedCount: document.querySelectorAll('.stage-area .processed-preview').length,
-        surface: describe('.crop-surface'),
-      }
-    })()`)
-    const assertCropGeometry = (layout, description) => {
-      assert(layout.crop && layout.surface, `${description} crop evidence is incomplete: ${JSON.stringify(layout)}`)
-      assert(layout.crop.width < 8 && layout.crop.height < 8, `${description} retained a large visual minimum: ${JSON.stringify(layout)}`)
-      assert(layout.crop.minWidth === '0px' && layout.crop.minHeight === '0px', `${description} uses a crop layout minimum: ${JSON.stringify(layout)}`)
-      const maskErrors = {
-        bottom: Math.abs(layout.mask.bottom.top - layout.crop.bottom),
-        left: Math.abs(layout.mask.left.right - layout.crop.left),
-        right: Math.abs(layout.mask.right.left - layout.crop.right),
-        top: Math.abs(layout.mask.top.bottom - layout.crop.top),
-      }
-      assert(Math.max(...Object.values(maskErrors)) <= 1.5, `${description} mask boundaries do not share the crop rectangle source of truth: ${JSON.stringify({ layout, maskErrors })}`)
-      assert(layout.guide?.visible && Math.abs(layout.guide.left - layout.crop.left) <= 1.5 && Math.abs(layout.guide.right - layout.crop.right) <= 1.5 && Math.abs(layout.guide.top - layout.crop.top) <= 1.5 && Math.abs(layout.guide.bottom - layout.crop.bottom) <= 1.5, `${description} guide bounds do not follow the crop rectangle: ${JSON.stringify(layout)}`)
-      assert(layout.stageProcessedCount === 0, `${description} put an encoded result back into the crop stage: ${JSON.stringify(layout)}`)
-      return maskErrors
-    }
-    const assertSeparateComparison = (layout, description) => {
-      const target = layout.comparison.canvas ?? layout.comparison.viewport
-      const result = layout.comparison.result
-      assert(target && result, `${description} comparison result evidence is incomplete: ${JSON.stringify(layout)}`)
-      const aligned = (rect) => Math.abs(rect.left - target.left) <= 1 &&
-        Math.abs(rect.right - target.right) <= 1 &&
-        Math.abs(rect.top - target.top) <= 1 &&
-        Math.abs(rect.bottom - target.bottom) <= 1
-      assert(aligned(result), `${description} result is not aligned to the separate comparison frame: ${JSON.stringify({ comparison: layout.comparison, crop: layout.crop })}`)
-      assert(result.width > layout.crop.width * 10 && result.height > layout.crop.height * 10, `${description} comparison result was incorrectly sized from the tiny crop frame: ${JSON.stringify({ comparison: layout.comparison, crop: layout.crop })}`)
-    }
-    const setTinyCrop = async (x, y, width, height, description) => {
-      for (const [selector, value] of [[cropInputSelectors[0], x], [cropInputSelectors[1], y], [cropInputSelectors[2], width], [cropInputSelectors[3], height]]) {
-        await setControlValue(cdp, sessionId, selector, value)
-      }
-      await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === ${JSON.stringify(`${x},${y},${width},${height}`)} && document.querySelector('.processed-preview')?.naturalWidth === ${width} && document.querySelector('.processed-preview')?.naturalHeight === ${height}`, `${description} completed preview`)
-    }
-    const assertEdge = (layout, edge, description) => {
-      const edgeErrors = edge === 'top-left'
-        ? { left: Math.abs(layout.crop.left - layout.surface.left), top: Math.abs(layout.crop.top - layout.surface.top) }
-        : { bottom: Math.abs(layout.surface.bottom - layout.crop.bottom), right: Math.abs(layout.surface.right - layout.crop.right) }
-      assert(Math.max(...Object.values(edgeErrors)) <= 1.5, `${description} crop is not aligned to the ${edge} surface edge: ${JSON.stringify({ layout, edgeErrors })}`)
+        throw new Error(`Successful candidate has not committed after export cancellation: ${JSON.stringify({ baseline, state })}`)
+      }, 'the successful candidate commit after export cancellation', PR8_ASSERTION_TIMEOUT_MS)
+      const released = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()')
+      assert(released === true, 'The cancelled export was not released from the Worker gate.')
+      const ready = await waitFor(async () => {
+        const state = await readPr8State(cdp, sessionId)
+        if (state.status === 'プレビュー準備完了' && state.busy === false && state.pending === false && state.previewUrl.startsWith('blob:') && state.sourceUrl === committed.sourceUrl && state.sourceDimensions === expectedSourceDimensions) {
+          return state
+        }
+        throw new Error(`Successful candidate did not settle after cancelling export: ${JSON.stringify({ committed, state })}`)
+      }, 'the successful candidate preview after export cancellation', PR8_ASSERTION_TIMEOUT_MS)
+      outcome = { committed, heldExport, ready }
+    } else {
+      const failed = await waitFor(async () => {
+      const state = await readPr8State(cdp, sessionId)
+        if (state.error.length > 0 && hasUsablePreview(state) && state.previewUrl === baseline.previewUrl && state.sourceUrl === baseline.sourceUrl) {
+          return state
+        }
+        throw new Error(`Failed candidate has not settled with the retained export preview: ${JSON.stringify({ baseline, state })}`)
+      }, 'the failed candidate after export cancellation', PR8_ASSERTION_TIMEOUT_MS)
+      const released = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()')
+      assert(released === true, 'The cancelled export for a failed candidate was not released from the Worker gate.')
+      const afterRelease = await waitFor(async () => {
+        const state = await readPr8State(cdp, sessionId)
+        if (state.error === failed.error && hasUsablePreview(state) && state.previewUrl === baseline.previewUrl && state.sourceUrl === baseline.sourceUrl) {
+          return state
+        }
+        throw new Error(`Cancelled export changed the retained result after failed candidate completion: ${JSON.stringify({ failed, state })}`)
+      }, 'the retained preview after releasing the cancelled failed export', PR8_ASSERTION_TIMEOUT_MS)
+      outcome = { failed, heldExport, afterRelease }
     }
 
-    const cases = []
-    for (const [viewportName, viewport] of [['desktop', DESKTOP_VIEWPORT], ['mobile', MOBILE_VIEWPORT]]) {
-      await setViewport(cdp, sessionId, viewport)
-      await waitForDom(cdp, sessionId, `window.innerWidth === ${viewport.width} && window.innerHeight === ${viewport.height}`, `the ${viewportName} tiny crop viewport`)
-      for (const [edge, x, y] of [['top-left', 0, 0], ['right-bottom', 999, 599]]) {
-        await setTinyCrop(x, y, 1, 1, `${viewportName} ${edge} tiny crop`)
-        const completedLayout = await readLayout()
-        const previewMaskErrors = assertCropGeometry(completedLayout, `${viewportName} ${edge} completed tiny crop`)
-        assertSeparateComparison(completedLayout, `${viewportName} ${edge} completed tiny crop`)
-        assertEdge(completedLayout, edge, `${viewportName} ${edge} completed tiny crop`)
-
-        const currentState = await readPr8State(cdp, sessionId)
-        const nextQuality = Math.abs(currentState.quality - 0.57) < 0.001 ? 0.71 : 0.57
-        await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
-        await setControlValue(cdp, sessionId, '#quality', nextQuality)
-        await waitFor(async () => {
-          const state = await readPr8State(cdp, sessionId)
-          const gate = await readWorkerProcessGate(cdp, sessionId)
-          if (gate?.held && state.busy && state.pending && state.previewUrl === '' && state.downloadDisabled && state.crop.join(',') === `${x},${y},1,1`) {
-            return { gate, state }
-          }
-          throw new Error(`${viewportName} ${edge} tiny crop did not reach a held preview request: ${JSON.stringify({ gate, state })}`)
-        }, `${viewportName} ${edge} held tiny preview request`, PR8_ASSERTION_TIMEOUT_MS)
-        const pendingLayout = await readLayout()
-        const pendingMaskErrors = assertCropGeometry(pendingLayout, `${viewportName} ${edge} pending tiny crop`)
-        assertEdge(pendingLayout, edge, `${viewportName} ${edge} pending tiny crop`)
-        assert(pendingLayout.comparison.empty?.visible && pendingLayout.comparison.result === null, `${viewportName} ${edge} pending preview did not clear the separate comparison result: ${JSON.stringify(pendingLayout)}`)
-        assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, `${viewportName} ${edge} held tiny preview request was not released.`)
-        await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.processed-preview')?.naturalWidth === 1 && document.querySelector('.processed-preview')?.naturalHeight === 1`, `${viewportName} ${edge} restored tiny preview`)
-        cases.push({ edge, pending: pendingLayout, pendingMaskErrors, preview: completedLayout, previewMaskErrors, viewport: viewportName })
-      }
-    }
-    return { cases }
+    const filesAfter = (await readdir(downloadDirectory)).sort()
+    assert(JSON.stringify(filesAfter) === JSON.stringify(filesBefore), `Candidate selection produced a cancelled export download: ${JSON.stringify({ filesBefore, filesAfter })}`)
+    return outcome
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
-    await setViewport(cdp, sessionId, DESKTOP_VIEWPORT).catch(() => {})
-    await restoreReadySource(cdp, sessionId, fixturePath, 'tiny crop cleanup', '16 × 32 px')
   }
 }
 
-async function runPr8AdditionalFindingsRegression({ cdp, corruptFixturePath, cropDragFixturePath, downloadDirectory, fixturePath, sessionId, unsupportedFixturePath }) {
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport for PR8 additional regressions')
-  await restoreReadySource(cdp, sessionId, fixturePath, 'PR8 initial source', '16 × 32 px')
 
-  const cases = []
-  let decodeGate
+async function runCancelledExportEditRegression({ cdp, downloadDirectory, fixturePath, sessionId }) {
+  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'cancelled export edit baseline', '16 × 32 px')
+  const baseline = restored.ready
+  const filesBefore = (await readdir(downloadDirectory)).sort()
   try {
-    await installWorkerProcessGate(cdp, sessionId)
-    decodeGate = await installDecodeGate(cdp, sessionId)
-    await installPreviewDebounceGate(cdp, sessionId)
-    cases.push(await runLoggedPr8Case('same quality value does not invalidate the completed result', () => runNoopOutputInvalidationRegression({ cdp, fixturePath, label: 'same quality', selector: '#quality', sessionId, valueKey: 'quality' })))
-    cases.push(await runLoggedPr8Case('same MIME value does not invalidate the completed result', () => runNoopOutputInvalidationRegression({ cdp, fixturePath, label: 'same output MIME', selector: '#output-format', sessionId, valueKey: 'mime', })))
-    for (const invalidCase of [
-      { fixturePath: corruptFixturePath, label: 'corrupt replacement' },
-      { fixturePath: unsupportedFixturePath, label: 'unsupported replacement' },
-    ]) {
-      cases.push(await runLoggedPr8Case(`${invalidCase.label} before the initial 160ms debounce`, () => runPreDebounceInvalidReplacementRegression({ cdp, fixturePath, invalidFixturePath: invalidCase.fixturePath, invalidLabel: invalidCase.label, pendingFixturePath: cropDragFixturePath, sessionId })))
-      cases.push(await runLoggedPr8Case(`${invalidCase.label} during initial in-flight preview`, () => runPendingInvalidReplacementRegression({ cdp, fixturePath, invalidFixturePath: invalidCase.fixturePath, invalidLabel: invalidCase.label, pendingFixturePath: cropDragFixturePath, phase: 'initial in-flight', sessionId })))
-      cases.push(await runLoggedPr8Case(`${invalidCase.label} during edited in-flight preview`, () => runPendingInvalidReplacementRegression({ cdp, fixturePath, invalidFixturePath: invalidCase.fixturePath, invalidLabel: invalidCase.label, pendingFixturePath: cropDragFixturePath, phase: 'edited pending', sessionId })))
-    }
-    for (const exportCase of [
-      { candidateFixturePath: cropDragFixturePath, expectedSourceDimensions: '1000 × 600 px', label: 'successful' },
-      { candidateFixturePath: corruptFixturePath, expectedSourceDimensions: undefined, label: 'failed' },
-    ]) {
-      cases.push(await runLoggedPr8Case(`cancelled export with ${exportCase.label} candidate`, () => runCancelledExportSelectionRegression({ ...exportCase, cdp, downloadDirectory, fixturePath, sessionId })))
-    }
-    cases.push(await runLoggedPr8Case('cancelled export cannot block an edited current preview', () => runCancelledExportEditRegression({ cdp, downloadDirectory, fixturePath, sessionId })))
-    cases.push(await runLoggedPr8Case('latest candidate wins after obsolete decode', () => runLatestCandidateOrderingRegression({ cdp, cropDragFixturePath, decodeSupported: decodeGate?.supported === true, fixturePath, sessionId })))
-    cases.push(await runLoggedPr8Case('concurrent decode plus edit/reset keeps the committed source current', () => runConcurrentDecodeEditResetRegression({ cdp, decodeSupported: decodeGate?.supported === true, fixturePath, sessionId })))
-    cases.push(await runLoggedPr8Case('candidate commit releases comparison pressed during decode', () => runComparisonCommitRegression({ cdp, cropDragFixturePath, fixturePath, sessionId })))
-    cases.push(await runLoggedPr8Case('injected Worker encode failure settles', () => runFailedEncodeSettlementRegression({ cdp, fixturePath, sessionId })))
-    cases.push(await runLoggedPr8Case('compressed/original AX image ownership', () => runAccessibilityOcclusionRegression({ cdp, fixturePath, sessionId })))
-    cases.push(await runLoggedPr8Case('tiny crop rectangle, crop masks, and separate comparison bounds', () => runTinyCropComparisonRegression({ cdp, cropDragFixturePath, fixturePath, sessionId })))
+    const nextQuality = Math.abs(baseline.quality - 0.57) < 0.001 ? 0.71 : 0.57
+    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.arm()')
+    await clickButton(cdp, sessionId, '保存 .')
+    const heldExport = await waitFor(async () => {
+      const state = await readPr8State(cdp, sessionId)
+      const gate = await readWorkerProcessGate(cdp, sessionId)
+      if (gate?.held && state.busy && state.downloadDisabled && state.previewUrl === baseline.previewUrl && state.pending === false) {
+        return { gate, state }
+      }
+      throw new Error(`Export was not held before edit: ${JSON.stringify({ baseline, gate, state })}`)
+    }, 'the held export before edit', PR8_ASSERTION_TIMEOUT_MS)
 
-    const redCases = cases.filter((result) => result.status === 'red')
-    assert(redCases.length === 0, `PR8 additional browser regressions remain red: ${JSON.stringify(redCases.map(({ label, error }) => ({ error, label })))}`)
-    return { cases, redCases }
+    await setControlValue(cdp, sessionId, '#quality', nextQuality)
+    const readyBeforeRelease = await waitFor(async () => {
+      const state = await readPr8State(cdp, sessionId)
+      const gate = await readWorkerProcessGate(cdp, sessionId)
+      if (
+        gate?.held &&
+        state.quality === nextQuality &&
+        state.status === 'プレビュー準備完了' &&
+        state.busy === false &&
+        state.pending === false &&
+        state.previewUrl.startsWith('blob:') &&
+        state.previewUrl !== baseline.previewUrl &&
+        state.sourceUrl === baseline.sourceUrl &&
+        state.downloadDisabled === false
+      ) {
+        return state
+      }
+      throw new Error(`The current edited preview was not ready while the old export remained held: ${JSON.stringify({ baseline, heldExport, gate, state })}`)
+    }, 'the ready edited preview before releasing the old export', PR8_ASSERTION_TIMEOUT_MS)
+
+    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The obsolete export was not released after the edited preview became ready.')
+    const afterRelease = await waitFor(async () => {
+      const state = await readPr8State(cdp, sessionId)
+      if (
+        state.quality === nextQuality &&
+        state.status === 'プレビュー準備完了' &&
+        state.busy === false &&
+        state.pending === false &&
+        state.previewUrl === readyBeforeRelease.previewUrl &&
+        state.sourceUrl === readyBeforeRelease.sourceUrl &&
+        state.downloadDisabled === false
+      ) {
+        return state
+      }
+      throw new Error(`Releasing the obsolete export changed the current edited preview: ${JSON.stringify({ readyBeforeRelease, state })}`)
+    }, 'the unchanged edited preview after releasing the old export', PR8_ASSERTION_TIMEOUT_MS)
+    const filesAfter = (await readdir(downloadDirectory)).sort()
+    assert(JSON.stringify(filesAfter) === JSON.stringify(filesBefore), `The obsolete export produced a download after edit: ${JSON.stringify({ filesBefore, filesAfter })}`)
+    return { afterRelease, baseline, heldExport, readyBeforeRelease }
   } finally {
-    await removeE2EGates(cdp, sessionId).catch(() => {})
+    await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
   }
 }
 
-async function runRoundedPreviewRegression({ cdp, fixturePath, sessionId }) {
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport for the rounded preview')
-  const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 5
-    canvas.height = 5
-    const context = canvas.getContext('2d')
-    if (!context) throw new Error('Could not create a 2D canvas context for the rounded preview fixture.')
-    const colors = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f']
-    for (let row = 0; row < 5; row += 1) {
-      for (let column = 0; column < 5; column += 1) {
-        context.fillStyle = colors[(row < 3 ? 0 : 2) + (column < 3 ? 0 : 1)]
-        context.fillRect(column, row, 1, 1)
-      }
-    }
-    return canvas.toDataURL('image/png')
-  })()`)
-  const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
-  assert(encodedFixture, 'Rounded preview fixture did not encode as a PNG data URL.')
-  await writeFile(fixturePath, Buffer.from(encodedFixture, 'base64'))
 
-  await setFileInput(cdp, sessionId, fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '5 × 5 px'`, 'the rounded preview source dimensions')
-  await setControlValue(cdp, sessionId, '#aspect-ratio', '4:3')
-  const layout = await waitFor(async () => {
-    const next = await captureToolLayout(cdp, sessionId)
+async function runNoopOutputInvalidationRegression({ cdp, fixturePath, selector, sessionId, valueKey, label }) {
+  const restored = await restoreReadySource(cdp, sessionId, fixturePath, `${label} baseline`, '16 × 32 px')
+  const before = restored.ready
+  const value = valueKey === 'quality' ? before.quality : before.outputMime
+  assert(valueKey === 'quality' ? Number.isFinite(value) : value.length > 0, `${label} has no current control value: ${JSON.stringify(before)}`)
+  await setControlValue(cdp, sessionId, selector, value)
+  const after = await waitFor(async () => {
+    const state = await readPr8State(cdp, sessionId)
     if (
-      next.status === 'プレビュー準備完了' &&
-      next.renderedSize?.width === 5 &&
-      next.renderedSize?.height === 4 &&
-      next.processedPreview?.naturalWidth === 5 &&
-      next.processedPreview?.naturalHeight === 4
+      state.sourceUrl === before.sourceUrl &&
+      state.previewUrl === before.previewUrl &&
+      state.status === 'プレビュー準備完了' &&
+      state.busy === false &&
+      state.pending === false &&
+      state.downloadDisabled === false
     ) {
-      return next
+      return state
     }
-    throw new Error(`Rounded preview is not ready with a real 5 x 4 output: ${JSON.stringify(next)}`)
-  }, 'the real 5 x 4 rounded preview')
-
-  await assertFitComparison(cdp, sessionId, 4 / 3)
-  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
-  await assertFitComparison(cdp, sessionId, 4 / 3)
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  assertProcessedPreviewAligned(layout, 'rounded 5 x 4')
-  const preview = layout.processedPreview
-  const comparison = layout.comparisonViewport
-  assert(preview && comparison, `Rounded preview comparison geometry is missing: ${JSON.stringify(layout)}`)
-  const naturalRatio = preview.naturalWidth / preview.naturalHeight
-  const comparisonRatio = (comparison.width - 2) / (comparison.height - 2)
-  assert(Math.abs(naturalRatio - 1.25) <= 0.001, `Rounded preview natural aspect changed unexpectedly: ${JSON.stringify({ preview, naturalRatio })}`)
-  assert(Math.abs(comparisonRatio - 4 / 3) <= 0.02, `Rounded preview comparison frame changed unexpectedly: ${JSON.stringify({ comparison, preview, comparisonRatio })}`)
-  assert(preview.objectFit === 'fill' && Math.abs(preview.image.width - comparison.width + 2) <= 2 && Math.abs(preview.image.height - comparison.height + 2) <= 2, `Rounded preview result does not fill the aligned comparison frame: ${JSON.stringify({ comparison, preview, naturalRatio, comparisonRatio })}`)
-  assert(preview.backgroundColor !== 'rgba(0, 0, 0, 0)' && preview.backgroundImage !== 'none', `Rounded preview comparison frame has no opaque checker background: ${JSON.stringify(preview)}`)
-
-  const sourceUrl = await evaluate(cdp, sessionId, "document.querySelector('.stage-image')?.src ?? ''")
-  await activateComparisonModeWithMouse(cdp, sessionId, 'original')
-  const original = await readComparisonState(cdp, sessionId)
-  assert(original.comparisonMode === 'original' && original.resultLayer?.visibility === 'hidden' && original.source?.visible && original.crop?.visible && original.processedInCropCount === 0, `Rounded preview original comparison is not isolated from the crop editor: ${JSON.stringify(original)}`)
-  await activateComparisonModeWithMouse(cdp, sessionId, 'compare')
-  const restored = await readComparisonState(cdp, sessionId)
-  assert(restored.comparisonMode === 'compare' && restored.resultImage?.visible && restored.source?.visible && restored.crop?.visible, `Rounded preview comparison did not restore the result mode: ${JSON.stringify(restored)}`)
-  assert(restored.resultImage?.dataKind === 'quick' && (await evaluate(cdp, sessionId, "document.querySelector('.stage-image')?.src ?? ''")) === sourceUrl, `Rounded preview mode switch changed the source identity: ${JSON.stringify({ restored, sourceUrl })}`)
-
-  return {
-    comparisonRatio,
-    naturalRatio,
-    output: layout.renderedSize,
-    original,
-    restored,
-  }
+    throw new Error(`${label} invalidated a result despite an unchanged value: ${JSON.stringify({ before, after: state })}`)
+  }, `${label} to preserve the completed result`, PR8_ASSERTION_TIMEOUT_MS)
+  return { after, before, value }
 }
 
-async function runTransparencyComparisonRegression({ cdp, sessionId, fixturePath }) {
-  const fixtureDataUrl = await evaluate(cdp, sessionId, `(() => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 8
-    canvas.height = 8
-    const context = canvas.getContext('2d')
-    if (!context) throw new Error('Could not create a 2D canvas context for the transparency fixture.')
-    context.clearRect(0, 0, canvas.width, canvas.height)
-    context.fillStyle = '#e63946'
-    context.fillRect(0, 0, 4, canvas.height)
-    return canvas.toDataURL('image/png')
-  })()`)
-  const encodedFixture = fixtureDataUrl?.match(/^data:image\/png;base64,(.+)$/)?.[1]
-  assert(encodedFixture, 'Transparency fixture did not encode as a PNG data URL.')
-  await writeFile(fixturePath, Buffer.from(encodedFixture, 'base64'))
-  await setControlValue(cdp, sessionId, '#output-format', 'image/png')
-  await waitForDom(cdp, sessionId, `document.querySelector('#output-format')?.value === 'image/png'`, 'the PNG output format for transparency comparison')
-  await setFileInput(cdp, sessionId, fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '8 × 8 px'`, 'the transparency fixture source dimensions')
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.processed-preview')?.src.startsWith('blob:') === true`, 'the transparent PNG processed preview')
 
-  const evidence = await evaluate(cdp, sessionId, `(async () => {
-    const source = document.querySelector('.stage-image')
-    const preview = document.querySelector('.processed-preview')
-    const viewport = document.querySelector('.comparison-viewport')
-    if (!(source instanceof HTMLImageElement) || !(preview instanceof HTMLImageElement) || !(viewport instanceof HTMLElement)) {
-      throw new Error('Transparency comparison stage images are missing.')
-    }
-    if (!preview.complete || preview.naturalWidth === 0 || preview.naturalHeight === 0) {
-      await new Promise((resolve, reject) => {
-        const handleLoad = () => {
-          cleanup()
-          resolve()
-        }
-        const handleError = () => {
-          cleanup()
-          reject(new Error('Transparency comparison preview image failed to load.'))
-        }
-        const cleanup = () => {
-          preview.removeEventListener('load', handleLoad)
-          preview.removeEventListener('error', handleError)
-        }
-        preview.addEventListener('load', handleLoad, { once: true })
-        preview.addEventListener('error', handleError, { once: true })
-      })
-    }
-    if (!preview.complete || preview.naturalWidth === 0 || preview.naturalHeight === 0) {
-      throw new Error('Transparency comparison preview image has no natural dimensions.')
-    }
-    const canvas = document.createElement('canvas')
-    canvas.width = preview.naturalWidth
-    canvas.height = preview.naturalHeight
-    const context = canvas.getContext('2d', { willReadFrequently: true })
-    if (!context) throw new Error('Transparency comparison canvas context is unavailable.')
-    context.drawImage(preview, 0, 0)
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
-    const previewRect = preview.getBoundingClientRect()
-    const viewportRect = viewport.getBoundingClientRect()
-    const transparentPixelOffset = ((canvas.width - 1) * 4)
-    const opaqueRedPixelOffset = 0
-    return {
-      natural: { height: preview.naturalHeight, width: preview.naturalWidth },
-      previewRect: { bottom: previewRect.bottom, left: previewRect.left, right: previewRect.right, top: previewRect.top },
-      opaqueRedPixel: {
-        alpha: pixels[opaqueRedPixelOffset + 3],
-        blue: pixels[opaqueRedPixelOffset + 2],
-        green: pixels[opaqueRedPixelOffset + 1],
-        red: pixels[opaqueRedPixelOffset],
-      },
-      transparentPixel: {
-        alpha: pixels[transparentPixelOffset + 3],
-        red: pixels[transparentPixelOffset],
-      },
-      sourceNatural: { height: source.naturalHeight, width: source.naturalWidth },
-      viewportRect: { bottom: viewportRect.bottom, left: viewportRect.left, right: viewportRect.right, top: viewportRect.top },
-    }
-  })()`)
-  assert(evidence.transparentPixel.alpha === 0, `The transparency fixture did not retain a transparent right-half output pixel: ${JSON.stringify(evidence)}`)
-  assert(evidence.opaqueRedPixel.alpha === 255 && evidence.opaqueRedPixel.red === 230 && evidence.opaqueRedPixel.green === 57 && evidence.opaqueRedPixel.blue === 70, `The transparency fixture did not retain its opaque red left-half output pixel: ${JSON.stringify(evidence)}`)
-  assert(evidence.natural.width === 8 && evidence.natural.height === 8, `The transparent preview natural size was unexpected: ${JSON.stringify(evidence)}`)
-  assert(Math.abs(evidence.previewRect.left - evidence.viewportRect.left) <= 1 && Math.abs(evidence.previewRect.right - evidence.viewportRect.right) <= 1 && Math.abs(evidence.previewRect.top - evidence.viewportRect.top) <= 1 && Math.abs(evidence.previewRect.bottom - evidence.viewportRect.bottom) <= 1, `The transparent processed preview escaped the comparison viewport: ${JSON.stringify(evidence)}`)
-
-  const layerStyles = await evaluate(cdp, sessionId, `(() => {
-    const read = (selector) => {
-      const element = document.querySelector(selector)
-      if (!(element instanceof HTMLElement)) return null
-      const style = getComputedStyle(element)
-      return {
-        backgroundColor: style.backgroundColor,
-        backgroundImage: style.backgroundImage,
-        backgroundSize: style.backgroundSize,
-      }
-    }
-    return { original: read('.comparison-original-layer'), result: read('.comparison-result-layer') }
-  })()`)
-  assert(layerStyles.original && layerStyles.result, `The transparent comparison layers are missing: ${JSON.stringify(layerStyles)}`)
-  assert(layerStyles.original.backgroundColor !== 'rgba(0, 0, 0, 0)' && layerStyles.original.backgroundImage !== 'none', `The original comparison layer has no opaque checkerboard: ${JSON.stringify(layerStyles)}`)
-  assert(layerStyles.result.backgroundColor !== 'rgba(0, 0, 0, 0)' && layerStyles.result.backgroundImage !== 'none', `The result comparison layer has no opaque checkerboard: ${JSON.stringify(layerStyles)}`)
-  assert(JSON.stringify(layerStyles.original) === JSON.stringify(layerStyles.result), `The comparison layers do not share the same opaque checkerboard: ${JSON.stringify(layerStyles)}`)
-
-  const checkerColors = [
-    [238, 241, 238],
-    [203, 210, 207],
-  ]
-  const sampleFractions = [
-    [0.68, 0.42],
-    [0.76, 0.58],
-    [0.84, 0.74],
-    [0.92, 0.46],
-  ]
-  const isCheckerPixel = (pixel) => checkerColors.some(([red, green, blue]) => (
-    Math.abs(pixel.red - red) <= 28 && Math.abs(pixel.green - green) <= 28 && Math.abs(pixel.blue - blue) <= 28
-  ))
-  const captureComparisonSamples = async (mode, split) => {
-    await activateComparisonModeWithMouse(cdp, sessionId, mode)
-    if (split !== undefined) await setControlValue(cdp, sessionId, '#comparison-split', split)
-    await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.comparison-mode-button')].find((button) => button.getAttribute('aria-pressed') === 'true')?.getAttribute('data-comparison-mode') === ${JSON.stringify(mode)}`, `${mode} transparency comparison mode`)
-    await evaluate(cdp, sessionId, `document.querySelector('.comparison-section')?.scrollIntoView({ block: 'center', inline: 'nearest' })`)
-    const state = await readComparisonState(cdp, sessionId)
-    assert(state.viewport?.visible, `${mode} transparency comparison viewport is not visible: ${JSON.stringify(state)}`)
-    const pixels = await captureScreenshotSamples(cdp, sessionId, sampleFractions.map(([x, y]) => [
-      state.viewport.left + state.viewport.width * x,
-      state.viewport.top + state.viewport.height * y,
-    ]))
-    return { mode, pixels, state }
-  }
-
-  await setControlValue(cdp, sessionId, '#output-format', 'image/jpeg')
-  const jpegReady = await waitFor(async () => {
-    const state = await readPr8State(cdp, sessionId)
-    if (state.outputMime === 'image/jpeg' && state.status === 'プレビュー準備完了' && state.previewNaturalWidth === 8 && state.previewNaturalHeight === 8 && state.previewUrl.startsWith('blob:')) return state
-    throw new Error(`The JPEG transparency preview is not ready: ${JSON.stringify(state)}`)
-  }, 'the JPEG transparency preview', PR8_ASSERTION_TIMEOUT_MS)
-  const jpegResult = await captureComparisonSamples('result')
-  const jpegCompare = await captureComparisonSamples('compare', 100)
-  assert(jpegResult.pixels.some((pixel) => !isCheckerPixel(pixel)), `The JPEG result samples unexpectedly look like the checkerboard: ${JSON.stringify({ jpegReady, jpegResult })}`)
-  assert(jpegCompare.pixels.every(isCheckerPixel), `Transparent original pixels exposed the encoded result instead of the original layer checkerboard: ${JSON.stringify({ jpegCompare, jpegResult, layerStyles })}`)
-  assert(jpegCompare.pixels.some((pixel, index) => JSON.stringify(pixel) !== JSON.stringify(jpegResult.pixels[index])), `Transparent original pixels matched the encoded result through the comparison layer: ${JSON.stringify({ jpegCompare, jpegResult })}`)
-
-  await setControlValue(cdp, sessionId, '#output-format', 'image/png')
-  const pngReady = await waitFor(async () => {
-    const state = await readPr8State(cdp, sessionId)
-    if (state.outputMime === 'image/png' && state.status === 'プレビュー準備完了' && state.previewNaturalWidth === 8 && state.previewNaturalHeight === 8 && state.previewUrl.startsWith('blob:')) return state
-    throw new Error(`The PNG transparency preview is not ready after JPEG comparison: ${JSON.stringify(state)}`)
-  }, 'the PNG transparency preview after layer comparison', PR8_ASSERTION_TIMEOUT_MS)
-  const pngResult = await captureComparisonSamples('result')
-  assert(pngResult.pixels.every(isCheckerPixel), `Transparent result pixels did not use the result layer checkerboard: ${JSON.stringify({ layerStyles, pngReady, pngResult })}`)
-  assertComparisonRectsAligned(pngResult.state, 'transparent PNG comparison alignment')
-  return { evidence, jpegCompare, jpegResult, layerStyles, pngReady, pngResult }
+async function waitForFullOutput(cdp, sessionId) {
+  await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'full' && document.querySelector('.processed-preview')?.complete && !document.querySelector('.download-button')?.disabled`, 'current full output')
 }
 
-async function runScenario({ allowedPaths, basePath, corruptFixturePath, cropDragFixturePath, downloadDirectory, fixturePath, layoutFixtures, pageUrl, origin, requestLog, cdp, sessionId, targetId, roundedPreviewFixturePath, sourceFamilies, sourceOrientation, transparencyFixturePath, unsupportedFixturePath }) {
+async function selectEditorView(cdp, sessionId, view) {
+  await evaluate(cdp, sessionId, `document.querySelectorAll('.view-switch button')[${view === 'edit' ? 0 : 1}].click()`)
+  await waitForDom(cdp, sessionId, `document.querySelector('.${view === 'edit' ? 'stage-area' : 'comparison-section'}')?.hidden === false`, `${view} view`)
+}
+
+async function setOutputPanel(cdp, sessionId, open) {
+  if (await evaluate(cdp, sessionId, `document.querySelector('.output-toggle')?.getAttribute('aria-expanded') !== '${open}'`)) {
+    await clickButton(cdp, sessionId, '出力設定')
+  }
+  await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === ${!open}`, 'output panel state')
+}
+
+async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
+  await setViewport(cdp, sessionId, viewport)
+  await setOutputPanel(cdp, sessionId, panelOpen)
+  await selectEditorView(cdp, sessionId, 'edit')
+  const layout = await evaluate(cdp, sessionId, `(() => {
+    const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height, right:r.right, bottom:r.bottom } }
+    return { root:rect('#root'), body:rect('body'), html:rect('html'), shell:rect('.editor-shell'), stage:rect('.stage-area'), surface:rect('.crop-surface'), bottom:rect('.editor-bottom'), panel:rect('#output-panel'), editor:rect('.editor-column'), header:rect('.tool-toolbar'),
+      scrollHeight:document.documentElement.scrollHeight, scrollWidth:document.documentElement.scrollWidth,
+      fullscreen:document.fullscreenElement !== null, headings:document.querySelectorAll('.workspace h2').length,
+      footer:document.querySelector('footer') !== null,
+      buttons:[...document.querySelectorAll('.tool-toolbar button,.edit-modes button')].map(b=>({height:b.getBoundingClientRect().height,width:b.getBoundingClientRect().width})),
+    }
+  })()`)
+  const inside = r => r.x >= -1 && r.y >= -1 && r.right <= viewport.width + 1 && r.bottom <= viewport.height + 1
+  assert(layout.shell.height === viewport.height && !layout.fullscreen, `Editor must own the website viewport: ${JSON.stringify(layout)}`)
+  assert(layout.scrollWidth <= viewport.width && layout.scrollHeight <= viewport.height + 1, `Editor overflow: ${JSON.stringify(layout)}`)
+  assert(!layout.footer && layout.headings === 0, 'Retired headings or footer remain in the editor.')
+  assert(inside(layout.header) && inside(layout.bottom) && inside(layout.stage), `Primary controls escaped viewport: ${JSON.stringify(layout)}`)
+  assert(layout.surface.width > 0 && layout.surface.height >= 80 && inside(layout.surface), `Image does not fit: ${JSON.stringify(layout)}`)
+  assert(layout.surface.bottom <= layout.bottom.y && layout.stage.bottom <= layout.bottom.y + 1, 'Image overlaps the bottom controls.')
+  assert(layout.buttons.every(b => b.height >= 44 && b.width >= 44), 'Primary buttons must have 44px tap targets.')
+  if (panelOpen) {
+    assert(inside(layout.panel) && layout.panel.height > 0, 'Output panel must fit inside the workspace.')
+    assert(viewport.width < 768 ? layout.panel.y >= layout.editor.bottom - 1 : layout.panel.x >= layout.editor.right - 1, `Panel covers the image: ${JSON.stringify(layout)}`)
+    assert(layout.panel.bottom <= layout.bottom.y + 1, 'Output panel overlaps edit modes.')
+  }
+  return layout
+}
+
+async function assertTransformedPixels(cdp, sessionId, { rotation, straighten, flipHorizontal, flipVertical }) {
+  // Independent Canvas oracle: construct the transformed full frame, then crop/resize it.
+  const result = await evaluate(cdp, sessionId, `(async () => {
+    const source = document.querySelector('.stage-image'); await source.decode()
+    const actual = document.querySelector('.processed-preview'); await actual.decode()
+    const w = ${rotation} % 180 ? source.naturalHeight : source.naturalWidth
+    const h = ${rotation} % 180 ? source.naturalWidth : source.naturalHeight
+    const a = ${straighten} * Math.PI / 180
+    const s = Math.max((w*Math.cos(a)+h*Math.abs(Math.sin(a)))/w, (h*Math.cos(a)+w*Math.abs(Math.sin(a)))/h)
+    const frame = document.createElement('canvas'); frame.width=w; frame.height=h
+    const ctx=frame.getContext('2d'); ctx.translate(w/2,h/2); ctx.scale(${flipHorizontal ? -1 : 1},${flipVertical ? -1 : 1}); ctx.rotate((${rotation}+${straighten})*Math.PI/180); ctx.scale(s,s); ctx.drawImage(source,-source.naturalWidth/2,-source.naturalHeight/2)
+    const values=[...document.querySelectorAll('.crop-coordinates input')].map(i=>Number(i.value))
+    const expected=document.createElement('canvas'); expected.width=actual.naturalWidth; expected.height=actual.naturalHeight
+    const ec=expected.getContext('2d'); ec.imageSmoothingQuality='high'; ec.drawImage(frame,...values,0,0,expected.width,expected.height)
+    const output=document.createElement('canvas'); output.width=expected.width; output.height=expected.height
+    const oc=output.getContext('2d'); oc.drawImage(actual,0,0)
+    const e=ec.getImageData(0,0,expected.width,expected.height).data, o=oc.getImageData(0,0,expected.width,expected.height).data
+    let sum=0, max=0, transparent=0
+    for(let i=0;i<e.length;i++) { const d=Math.abs(e[i]-o[i]); sum+=d; max=Math.max(max,d); if(i%4===3 && o[i]===0) transparent++ }
+    return {mean:sum/e.length,max,transparent,width:output.width,height:output.height,transform:source.style.transform}
+  })()`)
+  assert(result.mean < 2, `Worker pixels differ from transform/crop/resize oracle: ${JSON.stringify(result)}`)
+  return result
+}
+
+async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath, cropDragFixturePath, corruptFixturePath, unsupportedFixturePath, downloadDirectory, pageUrl, origin, requestLog, targetId, sourceFamilies, sourceOrientation }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
-  const screenshots = {}
-
-  await cdp.send('Network.enable', {}, sessionId)
-  await cdp.send('Runtime.enable', {}, sessionId)
-  await cdp.send('Log.enable', {}, sessionId)
-  await cdp.send('Page.enable', {}, sessionId)
-  await evaluate(cdp, sessionId, `(() => {
-    window.addEventListener('error', (event) => console.error('[e2e] window error', event.error?.stack || event.message))
-    window.addEventListener('unhandledrejection', (event) => console.error('[e2e] unhandled rejection', event.reason?.stack || String(event.reason)))
-  })()`)
-
+  for (const domain of ['Network','Runtime','Log','Page']) await cdp.send(`${domain}.enable`, {}, sessionId)
   await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await cdp.send('Page.navigate', { url: pageUrl }, sessionId)
-  await waitForDom(cdp, sessionId, `document.readyState === 'complete' && document.querySelector('input[type="file"]') !== null`, 'the built app to load')
+  await cdp.send('Page.navigate', {url:pageUrl}, sessionId)
+  await waitForDom(cdp, sessionId, `document.querySelector('#image-input') !== null`, 'built app')
+  await evaluate(cdp, sessionId, `(() => {
+    window.__e2eBlobs = new Map(); window.__e2eRevoked = []
+    const create = URL.createObjectURL, revoke = URL.revokeObjectURL
+    URL.createObjectURL = blob => { const url=create(blob); window.__e2eBlobs.set(url,blob); return url }
+    URL.revokeObjectURL = url => { window.__e2eBlobs.delete(url); window.__e2eRevoked.push(url); revoke(url) }
+  })()`)
   await assertPublicMetadataAndFooter(cdp, sessionId, basePath)
   await assertEmptyFirstView(cdp, sessionId, DESKTOP_VIEWPORT, 'desktop')
-  screenshots.emptyDesktop = await captureScreenshot(cdp, sessionId, 'empty-desktop.png')
   await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the empty mobile viewport')
   await assertEmptyFirstView(cdp, sessionId, MOBILE_VIEWPORT, 'mobile')
-  screenshots.emptyMobile = await captureScreenshot(cdp, sessionId, 'empty-mobile.png')
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport before initial drop')
+  await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForFileLoad(cdp, sessionId)
-  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '16 × 32 px'`, 'the normalized source dimensions')
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the initial Worker preview')
-  await assertLoadedFirstView(cdp, sessionId, DESKTOP_VIEWPORT, 'desktop')
-  screenshots.loadedDesktop = await captureScreenshot(cdp, sessionId, 'loaded-desktop.png')
-  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${MOBILE_VIEWPORT.width} && window.innerHeight === ${MOBILE_VIEWPORT.height}`, 'the mobile viewport')
-  await assertLoadedFirstView(cdp, sessionId, MOBILE_VIEWPORT, 'mobile')
-  screenshots.loadedMobile = await captureScreenshot(cdp, sessionId, 'loaded-mobile.png')
-  const corruptionRegression = await runCorruptReplacementRegression({ cdp, corruptFixturePath, downloadDirectory, sessionId, unsupportedFixturePath })
-  const stageSrcBeforeNativeSelection = await evaluate(cdp, sessionId, "document.querySelector('.stage-image')?.src ?? ''")
-  await setFileInput(cdp, sessionId, fixturePath)
-  await waitForDom(cdp, sessionId, `(() => {
-    const sourceImage = document.querySelector('.stage-image')
-    return typeof sourceImage?.src === 'string' && sourceImage.src.length > 0 && sourceImage.src !== ${JSON.stringify(stageSrcBeforeNativeSelection)}
-  })()`, 'the native file input to replace the stage image')
-  await waitForFileLoad(cdp, sessionId)
-  await waitForDom(cdp, sessionId, `document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '16 × 32 px'`, 'the native file input source dimensions')
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the initial Worker preview after native file selection')
-  await dispatchFileDrop(cdp, sessionId, '.change-image-button', fixturePath, 'e2e-metadata-fixture-replacement.jpg')
-  await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.alt === 'e2e-metadata-fixture-replacement.jpg の編集対象'`, 'the loaded change-image drop replacement')
-  await waitForDom(cdp, sessionId, `document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the replacement Worker preview')
-  await setViewport(cdp, sessionId, DESKTOP_VIEWPORT)
-  await waitForDom(cdp, sessionId, `window.innerWidth === ${DESKTOP_VIEWPORT.width} && window.innerHeight === ${DESKTOP_VIEWPORT.height}`, 'the desktop viewport after mobile layout checks')
-  const tabletSaveLayoutRegression = await runTabletSaveLayoutRegression({ cdp, sessionId })
-  const aspectAndGuideRegression = await runAspectAndGuideRegression({ cdp, sessionId })
-  if (aspectAndGuideRegression.screenshot) {
-    screenshots.compositionGuide = aspectAndGuideRegression.screenshot
+  await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'initial quick preview')
+  await delay(800)
+  assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.every(r => r.preview)`), 'Closed output panel started an automatic full encode.')
+  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Output panel must start collapsed.')
+  await setOutputPanel(cdp, sessionId, true)
+  await waitForFullOutput(cdp, sessionId)
+  const requestCount = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.requests.length')
+  await setControlValue(cdp, sessionId, '#quality', '0.81')
+  await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'quick preview before cancelling the scheduled full encode')
+  await setOutputPanel(cdp, sessionId, false)
+  await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'quick preview after closing output settings')
+  await delay(800)
+  assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).every(r => r.preview)`), 'Closing the panel did not cancel the pending automatic full encode.')
+  await clickButton(cdp, sessionId, '保存 .')
+  await waitForFullOutput(cdp, sessionId)
+  await waitForDownloadedFile(downloadDirectory, 'e2e-metadata-fixture-edited.jpg')
+  assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).filter(r => !r.preview).length === 1`), 'Explicit save with a closed panel must encode exactly once.')
+  assert(await evaluate(cdp, sessionId, `document.querySelector('.metrics-card .metric-line strong').textContent === '16 × 32 px'`), 'EXIF orientation was not normalized.')
+  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Output panel must start collapsed.')
+  const layouts = []
+  for (const viewport of [DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
+    for(const open of [false,true]) {
+      layouts.push(await assertEditorLayout(cdp,sessionId,viewport,open))
+      await captureScreenshot(cdp,sessionId,`editor-${viewport.width}-${viewport.height}-${open?'output':'crop'}.png`)
+    }
   }
-  await openDetails(cdp, sessionId, '.advanced-controls')
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await setOutputPanel(cdp,sessionId,true)
+  await evaluate(cdp,sessionId, `document.querySelector('#output-panel .panel-close').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+  await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && document.activeElement === document.querySelector('.output-toggle')`, 'Escape closes panel and restores focus')
+  await setOutputPanel(cdp,sessionId,true)
 
-  const initialLayout = await evaluate(cdp, sessionId, `(() => {
-    const surface = document.querySelector('.crop-surface')
-    const sourceImage = document.querySelector('.stage-image')
-    const rect = surface?.getBoundingClientRect()
-    const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
-    return {
-      sourceDimensions: document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim(),
-      sourceNaturalHeight: sourceImage?.naturalHeight,
-      sourceNaturalWidth: sourceImage?.naturalWidth,
-      surfaceHeight: rect?.height,
-      surfaceRatio: rect ? rect.width / rect.height : undefined,
-      surfaceWidth: rect?.width,
-      stageAreaHeight: document.querySelector('.stage-area')?.getBoundingClientRect().height,
-      rootFontSize,
-    }
-  })()`)
-  assert(initialLayout.sourceDimensions === '16 × 32 px', `App source dimensions were not normalized: ${JSON.stringify(initialLayout)}`)
-  assert(initialLayout.sourceNaturalWidth === 16 && initialLayout.sourceNaturalHeight === 32, `Source img natural dimensions were not normalized: ${JSON.stringify(initialLayout)}`)
-  assert(Math.abs(initialLayout.surfaceRatio - 0.5) <= 0.01, `Portrait crop surface ratio was not preserved: ${JSON.stringify(initialLayout)}`)
-  assert(initialLayout.stageAreaHeight >= 500, `Desktop stage area is not large enough for the full-window editor: ${JSON.stringify(initialLayout)}`)
-  assert(initialLayout.surfaceHeight > 320, `Desktop portrait crop surface did not grow beyond the retired height cap: ${JSON.stringify(initialLayout)}`)
+  // PNG oracle fixture with asymmetric colored cells (large enough for reduced preview).
+  const png = await evaluate(cdp,sessionId,`(() => {const c=document.createElement('canvas');c.width=1000;c.height=600;const x=c.getContext('2d');for(let y=0;y<600;y+=20) for(let z=0;z<1000;z+=20){x.fillStyle='rgb('+((z*7+y)%256)+','+((y*3+z)%256)+','+((z+y*5)%256)+')';x.fillRect(z,y,20,20)}return c.toDataURL().split(',')[1]})()`)
+  await writeFile(cropDragFixturePath,Buffer.from(png,'base64'))
+  await setFileInput(cdp,sessionId,cropDragFixturePath)
+  await waitForFullOutput(cdp,sessionId)
+  await setControlValue(cdp,sessionId,'#output-format','image/png')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('#quality') === null`), 'PNG must not expose lossy quality.')
+  await clickButton(cdp,sessionId,'傾き・反転')
+  await clickButton(cdp,sessionId,'右へ90°')
+  await clickButton(cdp,sessionId,'左右反転')
+  await setControlValue(cdp,sessionId,'#straighten','17.3')
+  await waitForFullOutput(cdp,sessionId)
+  const pixels=[]
+  pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:17.3,flipHorizontal:true,flipVertical:false}))
+  assert(pixels[0].transparent===0,'Straightening introduced transparent corners.')
+  await clickButton(cdp,sessionId,'上下反転')
+  await setControlValue(cdp,sessionId,'#straighten','-45')
+  await waitForFullOutput(cdp,sessionId)
+  pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true}))
+  assert(pixels[1].transparent===0,'Extreme straightening introduced transparent corners.')
+  await captureScreenshot(cdp,sessionId,'editor-straighten.png')
 
-  await setControlValue(cdp, sessionId, '#aspect-ratio', '1:1')
-  await waitForDom(cdp, sessionId, `document.querySelector('#aspect-ratio')?.value === '1:1'`, 'the 1:1 preset')
-  await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '0,8,16,16'`, 'the centered 1:1 crop')
-  await clickButton(cdp, sessionId, '右へ90°')
-  await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.style.transform === 'translate(-50%, -50%) scaleX(1) scaleY(1) rotate(90deg)'`, 'the right 90-degree rotation')
-  await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '8,0,16,16'`, 'the centered crop after rotation')
-  await clickButton(cdp, sessionId, '左右反転')
-  await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.style.transform === 'translate(-50%, -50%) scaleX(-1) scaleY(1) rotate(90deg)'`, 'the 90-degree horizontal final-axis flip order')
-  await waitForDom(cdp, sessionId, `[...document.querySelectorAll('button')].find((button) => button.textContent?.includes('左右反転'))?.classList.contains('is-selected') && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the horizontal flip preview')
+  await clickButton(cdp,sessionId,'クロップ')
+  await setControlValue(cdp,sessionId,'#aspect-ratio','free')
+  await openDetails(cdp,sessionId,'.advanced-controls')
+  for(const [n,value] of [[2,400],[3,600],[0,40],[1,60]]) await setControlValue(cdp,sessionId,`.crop-coordinates label:nth-child(${n+1}) input`,value)
+  await setControlValue(cdp,sessionId,'#resize-width','200')
+  await waitForFullOutput(cdp,sessionId)
+  pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true}))
+  // Close details before pointer interaction; the crop must remain keyboard and mouse operable.
+  await evaluate(cdp,sessionId,`document.querySelector('.advanced-controls').open=false`)
+  await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`)
+  await waitForDom(cdp,sessionId,`document.querySelector('.crop-coordinates input').value==='41'`,'keyboard crop move')
+  const cropBefore=await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates input').value`)
+  const r=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-rectangle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...r,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:r.x+10,y:r.y+10,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:r.x+10,y:r.y+10,button:'left',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates input').value !== '${cropBefore}'`),'Pointer crop move did not update geometry.')
+  await waitForFullOutput(cdp,sessionId)
 
-  const intermediatePixels = await capturePixelEvidence(cdp, sessionId)
-  assert(intermediatePixels.source.width === 16 && intermediatePixels.source.height === 32, `Intermediate source canvas dimensions were not normalized: ${JSON.stringify(intermediatePixels.source)}`)
-  assert(intermediatePixels.preview.width === 16 && intermediatePixels.preview.height === 16, `Intermediate preview dimensions were unexpected: ${JSON.stringify(intermediatePixels.preview)}`)
-  const intermediateState = { rotation: 90, flipHorizontal: true, flipVertical: false }
-  const intermediateExpected = computeExpectedPixels(
-    intermediatePixels.source,
-    intermediatePixels.crop,
-    intermediateState,
-    intermediatePixels.preview,
-  )
-  const intermediateWrongMapping = computeExpectedPixels(
-    intermediatePixels.source,
-    intermediatePixels.crop,
-    intermediateState,
-    intermediatePixels.preview,
-    true,
-  )
-  const intermediateError = assertJpegPixelEvidence('90-degree horizontal-flip preview', new Uint8ClampedArray(intermediatePixels.preview.pixels), intermediateExpected)
-  const intermediateWrongError = summarizePixelError(new Uint8ClampedArray(intermediatePixels.preview.pixels), intermediateWrongMapping)
-  assertMappingSeparation('90-degree horizontal-flip order', intermediateError, intermediateWrongError)
-
-  await clickButton(cdp, sessionId, '上下反転')
-  await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.style.transform === 'translate(-50%, -50%) scaleX(-1) scaleY(-1) rotate(90deg)' && [...document.querySelectorAll('button')].find((button) => button.textContent?.includes('上下反転'))?.classList.contains('is-selected') && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了' && document.querySelector('.processed-preview')?.src.startsWith('blob:') === true`, 'the vertical flip')
-  const qualityPreviewBefore = await evaluate(cdp, sessionId, `(() => {
-    const image = document.querySelector('.processed-preview')
-    return image instanceof HTMLImageElement ? { src: image.src } : null
-  })()`)
-  await setControlValue(cdp, sessionId, '#quality', '0.57')
-  await waitForDom(cdp, sessionId, `document.querySelector('#quality')?.value === '0.57' && document.querySelector('output[for="quality"]')?.textContent?.trim() === '57%'`, 'the JPEG quality change')
-  const qualityPreviewAfter = await waitFor(async () => {
-    const next = await evaluate(cdp, sessionId, `(() => {
-      const image = document.querySelector('.processed-preview')
-      return {
-        bytes: document.querySelector('.metrics-card .metric-line:nth-child(4) strong')?.textContent?.trim() ?? '',
-        src: image instanceof HTMLImageElement ? image.src : '',
-        status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
-      }
-    })()`)
-    if (next.status === 'プレビュー準備完了' && next.src.startsWith('blob:') && next.src !== qualityPreviewBefore?.src) {
-      return next
-    }
-    throw new Error(`Quality preview has not updated: ${JSON.stringify(next)}`)
-  }, 'the rendered preview after the JPEG quality change')
-  assert(qualityPreviewAfter.bytes.length > 0, `The quality change did not produce rendered output metrics: ${JSON.stringify(qualityPreviewAfter)}`)
-  await setControlValue(cdp, sessionId, '#resize-width', '16')
-  await waitForDom(cdp, sessionId, `document.querySelector('#resize-width')?.value === '16' && document.querySelector('#resize-height')?.value === ''`, 'the width-only resize control')
-
-  const previewState = await waitFor(async () => {
-    const domState = await evaluate(cdp, sessionId, `(() => ({
-      hasBlobPreview: document.querySelector('.processed-preview')?.src.startsWith('blob:') === true,
-      outputSize: document.querySelector('.effective-size strong')?.textContent?.trim(),
-      renderedSize: document.querySelector('.metrics-card .metric-line:nth-child(3) strong')?.textContent?.trim(),
-      processedPreviewCount: document.querySelectorAll('.processed-preview').length,
-      status: document.querySelector('.status-chip')?.textContent?.trim(),
-    }))()`)
-    const targets = await cdp.send('Target.getTargets')
-    const workerTargets = targets.targetInfos
-      .filter((target) => target.type === 'worker')
-      .map(({ type, url, targetId }) => ({ type, url, targetId }))
-    const observedWorkerAssetRequests = network.getObservedHttpRequests().filter((request) => (
-      isRasterWorkerAssetPath(new URL(request.url).pathname, basePath)
-    ))
-    const sameOriginWorkerAssetGets = observedWorkerAssetRequests.filter((request) => (
-      request.method === 'GET' &&
-      request.hasPostData !== true &&
-      request.failed !== true &&
-      originForRequest(request.url) === origin
-    ))
-    const serverWorkerAssetRequests = requestLog.filter((request) => (
-      request.method === 'GET' &&
-      request.statusCode === 200 &&
-      isRasterWorkerAssetPath(request.pathname, basePath)
-    ))
-    const verifiedWorkerAssetRequests = sameOriginWorkerAssetGets.filter((request) => {
-      const pathname = new URL(request.url).pathname
-      return serverWorkerAssetRequests.some((serverRequest) => serverRequest.pathname === pathname)
-    })
-    if (domState.status === 'プレビュー準備完了' && domState.renderedSize === '16 × 16 px' && domState.outputSize === '16 × 16 px' && domState.hasBlobPreview && domState.processedPreviewCount === 1 && workerTargets.length > 0 && verifiedWorkerAssetRequests.length > 0) {
-      return {
-        domState,
-        serverWorkerAssetRequests,
-        workerAssetRequests: verifiedWorkerAssetRequests,
-        workerTargets,
-      }
-    }
-    throw new Error(`Preview wait diagnostics: ${JSON.stringify({ domState, workerTargets, observedWorkerAssetRequests, sameOriginWorkerAssetGets, serverWorkerAssetRequests, verifiedWorkerAssetRequests, serverRequests: requestLog })}`)
-  }, 'a real Worker-generated 16 x 16 preview')
-
-  const finalPixels = await capturePixelEvidence(cdp, sessionId)
-  assert(finalPixels.source.width === 16 && finalPixels.source.height === 32, `Final source canvas dimensions were not normalized: ${JSON.stringify(finalPixels.source)}`)
-  assert(finalPixels.preview.width === 16 && finalPixels.preview.height === 16, `Final preview dimensions were unexpected: ${JSON.stringify(finalPixels.preview)}`)
-  const finalState = { rotation: 90, flipHorizontal: true, flipVertical: true }
-  const finalExpected = computeExpectedPixels(finalPixels.source, finalPixels.crop, finalState, finalPixels.preview)
-  const finalWrongMapping = computeExpectedPixels(finalPixels.source, finalPixels.crop, finalState, finalPixels.preview, true)
-  const finalError = assertJpegPixelEvidence('final rotate-and-double-flip preview', new Uint8ClampedArray(finalPixels.preview.pixels), finalExpected)
-  const finalWrongError = summarizePixelError(new Uint8ClampedArray(finalPixels.preview.pixels), finalWrongMapping)
-  assertMappingSeparation('final single-axis rotation-order mutation', finalError, finalWrongError)
-  assertProcessedPreviewAligned(await captureToolLayout(cdp, sessionId), 'edited')
-  const comparisonPersistenceRegression = await runComparisonPersistenceRegression({ cdp, sessionId })
-
-  diagnostics.assertClean()
-  await cdp.send('Browser.setDownloadBehavior', {
-    behavior: 'allow',
-    downloadPath: downloadDirectory,
-  })
-  const exportPreviewUrlBeforeGuide = await evaluate(cdp, sessionId, "document.querySelector('.processed-preview')?.src ?? ''")
-  await setControlValue(cdp, sessionId, '#composition-guide', 'golden')
-  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'golden' && document.querySelector('.processed-preview')?.src === ${JSON.stringify(exportPreviewUrlBeforeGuide)} && document.querySelector('.status-chip')?.textContent?.trim() === 'プレビュー準備完了'`, 'the unchanged preview before guide-visible export')
-  await clickButton(cdp, sessionId, 'ダウンロード')
-  const downloadedFilename = 'e2e-metadata-fixture-replacement-edited.jpg'
-  const downloadedPath = await waitForDownloadedFile(downloadDirectory, downloadedFilename)
-  const outputBytes = new Uint8Array(await readFile(downloadedPath))
-  const outputDimensions = parseJpegDimensions(outputBytes)
-  const outputFamilies = detectMetadataFamilies(outputBytes)
-  assert(outputDimensions.width === 16 && outputDimensions.height === 32, `Downloaded JPEG dimensions were ${outputDimensions.width}x${outputDimensions.height}, expected 16x32 after the comparison cleanup reset.`)
-  assert(Object.values(outputFamilies).every((value) => value === false), `Injected JPEG metadata remained in output: ${JSON.stringify(outputFamilies)}`)
-  const exportPreviewUrlAfterExport = await evaluate(cdp, sessionId, "document.querySelector('.processed-preview')?.src ?? ''")
-  await setControlValue(cdp, sessionId, '#composition-guide', 'thirds')
-  await waitForDom(cdp, sessionId, `document.querySelector('#composition-guide')?.value === 'thirds' && document.querySelector('.processed-preview')?.src === ${JSON.stringify(exportPreviewUrlAfterExport)}`, 'the default guide after guide-visible export')
-
-  const cropDragRegression = await runCropDragBoundsRegression({
-    cdp,
-    cropDragFixturePath,
-    downloadDirectory,
-    sessionId,
-  })
-
-  const fullOutputComparisonRegression = await runFullOutputComparisonRegression({
-    cdp,
-    downloadDirectory,
-    cropDragFixturePath,
-    fixturePath,
-    sessionId,
-  })
-
-  const pr8AdditionalFindingsRegression = await runPr8AdditionalFindingsRegression({
-    cdp,
-    corruptFixturePath,
-    cropDragFixturePath,
-    downloadDirectory,
-    fixturePath,
-    sessionId,
-    unsupportedFixturePath,
-  })
-
-  const cropSurfaceSizing = await runCropSurfaceSizingRegression({ cdp, layoutFixtures, sessionId })
-  const roundedPreviewRegression = await runRoundedPreviewRegression({ cdp, fixturePath: roundedPreviewFixturePath, sessionId })
-  const transparencyComparisonRegression = await runTransparencyComparisonRegression({ cdp, fixturePath: transparencyFixturePath, sessionId })
-  diagnostics.assertClean()
-
-  const observedRequests = network.getObservedRequests()
-  assertNetworkIsLocal(observedRequests, origin, { allowedPaths, requestLog })
-  const targetInfo = await getTargetInfo(cdp, targetId)
-  return {
-    browserTarget: targetInfo ? { targetId: targetInfo.targetId, type: targetInfo.type, url: targetInfo.url } : undefined,
-    aspectAndGuideRegression,
-    comparisonPersistenceRegression,
-    fullOutputComparisonRegression,
-    corruptionRegression,
-    roundedPreviewRegression,
-    tabletSaveLayoutRegression,
-    dimensions: outputDimensions,
-    downloadedBytes: outputBytes.length,
-    downloadedFilename: basename(downloadedPath),
-    metadata: {
-      output: outputFamilies,
-      outputMetadataFree: Object.values(outputFamilies).every((value) => value === false),
-      source: sourceFamilies,
-      sourceExifOrientation: sourceOrientation,
-    },
-    network: formatNetworkReport(observedRequests),
-    pr8AdditionalFindingsRegression,
-    cropSurfaceSizing,
-    cropDragRegression,
-    transparencyComparisonRegression,
-    preview: {
-      ...previewState,
-      pixelEvidence: {
-        final: { actual: finalError, wrongMapping: finalWrongError },
-        intermediate: { actual: intermediateError, wrongMapping: intermediateWrongError },
-      },
-    },
-    screenshots,
-    serverRequests: [...requestLog],
+  await selectEditorView(cdp,sessionId,'compare')
+  await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="compare"]').click()`)
+  await setControlValue(cdp,sessionId,'#comparison-split',35)
+  const comparison=await evaluate(cdp,sessionId,`(()=>{const v=document.querySelector('.comparison-viewport').getBoundingClientRect(),r=document.querySelector('.processed-preview').getBoundingClientRect();return {width:v.width,height:v.height,aligned:Math.abs(v.width-r.width)<1&&Math.abs(v.height-r.height)<1,clip:document.querySelector('.comparison-original-layer').style.clipPath,hidden:document.querySelector('.stage-area').hidden}})()`)
+  assert(comparison.aligned && comparison.width>0 && comparison.height>0 && comparison.hidden && comparison.clip.includes('65%'),'Single-stage comparison is misaligned.')
+  await clickButton(cdp,sessionId,'100%表示')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-canvas').getBoundingClientRect().width === document.querySelector('.processed-preview').naturalWidth`),'Actual-pixel comparison has wrong scale.')
+  await clickButton(cdp,sessionId,'全体表示')
+  await captureScreenshot(cdp,sessionId,'editor-comparison.png')
+  for(const viewport of [MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375}]) {
+    await setViewport(cdp,sessionId,viewport)
+    const fit=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.comparison-viewport').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right}})()`)
+    assert(fit.width>0 && fit.height>=60 && fit.bottom<=viewport.height && fit.right<=viewport.width, 'Comparison image must fit small windows: '+JSON.stringify(fit))
+    await captureScreenshot(cdp,sessionId,`editor-compare-${viewport.width}.png`)
   }
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  for(const mode of ['original','result','compare']) {
+    await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="${mode}"]').click()`)
+    await setControlValue(cdp,sessionId,'#composition-guide','golden')
+    assert(await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="${mode}"]').getAttribute('aria-pressed')==='true'`),'Comparison selection was not persistent.')
+  }
+
+  await setControlValue(cdp,sessionId,'#output-format','image/jpeg')
+  await setControlValue(cdp,sessionId,'#quality','0.57')
+  await waitForFullOutput(cdp,sessionId)
+  const bytes=await evaluate(cdp,sessionId,`(async()=>{const i=document.querySelector('.processed-preview');return Array.from(new Uint8Array(await window.__e2eBlobs.get(i.src).arrayBuffer()))})()`)
+  const expectedBytes=Buffer.from(bytes)
+  const capacity=await evaluate(cdp,sessionId,`({bytes:Number(document.querySelector('.processed-preview').dataset.outputBytes),bars:[...document.querySelectorAll('.capacity-track span')].map(e=>parseFloat(e.style.width)),reduction:document.querySelector('.reduction-line strong').textContent})`)
+  assert(capacity.bytes===expectedBytes.length && Math.max(...capacity.bars)===100,'Capacity bars do not reflect the full Blob.')
+  await installWorkerProcessGate(cdp,sessionId)
+  await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.arm()')
+  await clickButton(cdp,sessionId,'保存 .')
+  const downloadPath=await waitForDownloadedFile(downloadDirectory,'e2e-crop-drag-edited.jpg')
+  assert((await readFile(downloadPath)).equals(expectedBytes),'Download did not reuse the measured Blob.')
+  assert(!(await readWorkerProcessGate(cdp,sessionId)).held,'Saving an existing full result launched another encode.')
+  await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.disarm()')
+  assert(Object.values(detectMetadataFamilies(expectedBytes)).every(v=>!v),'Output metadata remained.')
+
+  // Invalid replacements retain the committed image and completed full result.
+  for(const invalid of [corruptFixturePath,unsupportedFixturePath]) {
+    const before=await readPr8State(cdp,sessionId)
+    await setFileInput(cdp,sessionId,invalid)
+    await waitForDom(cdp,sessionId,`document.querySelector('.error-message') !== null && !document.querySelector('.download-button').disabled`,'invalid replacement settles')
+    const after=await readPr8State(cdp,sessionId)
+    assert(after.sourceUrl===before.sourceUrl && after.previewUrl===before.previewUrl,'Invalid replacement discarded committed image/result.')
+  }
+
+  // Hold old preview or full output; a newer intent must win even after release.
+  const races=[]
+  for(const preview of [true,false]) {
+    await evaluate(cdp,sessionId,`window.__e2eWorkerProcessGate.arm(${preview})`)
+    await setControlValue(cdp,sessionId,'#quality',preview?'0.61':'0.62')
+    await waitForDom(cdp,sessionId,`window.__e2eWorkerProcessGate.held`,'held old render')
+    await setControlValue(cdp,sessionId,'#quality',preview?'0.71':'0.72')
+    await waitForFullOutput(cdp,sessionId)
+    const current=await readPr8State(cdp,sessionId)
+    await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.release()')
+    await delay(250)
+    const after=await readPr8State(cdp,sessionId)
+    assert(after.previewUrl===current.previewUrl && after.quality===current.quality,'Stale render replaced the latest result.')
+    races.push({preview,quality:after.quality})
+  }
+  const editTime=await evaluate(cdp,sessionId,'performance.now()')
+  await setControlValue(cdp,sessionId,'#quality','0.69')
+  await waitForFullOutput(cdp,sessionId)
+  const fullTime=await evaluate(cdp,sessionId,`window.__e2eWorkerProcessGate.requests.findLast(r=>!r.preview && r.quality===0.69).time`)
+  assert(fullTime-editTime>=590,'Automatic full output ran before the 600ms idle interval.')
+  // Full-output failure stops retrying until explicitly requested.
+  await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.arm(false)')
+  await setControlValue(cdp,sessionId,'#quality','0.63')
+  await waitForDom(cdp,sessionId,'window.__e2eWorkerProcessGate.held','held automatic full output')
+  await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.injectError()')
+  await waitForDom(cdp,sessionId,`document.querySelector('.verify-output-button') !== null && !document.querySelector('.status-chip').classList.contains('is-busy')`,'recoverable full error')
+  await delay(700)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.full-output-bytes-value').textContent==='計算できませんでした'`),'Failed output was presented as measured.')
+  await clickButton(cdp,sessionId,'容量計算を再試行')
+  await waitForFullOutput(cdp,sessionId)
+
+  // Retain deterministic decode, reset and invalid-file/preview race regressions.
+  await installDecodeGate(cdp,sessionId)
+  await runLatestCandidateOrderingRegression({cdp,sessionId,cropDragFixturePath,fixturePath,decodeSupported:true})
+  await runConcurrentDecodeEditResetRegression({cdp,sessionId,fixturePath,decodeSupported:true})
+  await runNoopOutputInvalidationRegression({cdp,sessionId,fixturePath,selector:'#quality',valueKey:'quality',label:'same quality'})
+  await runNoopOutputInvalidationRegression({cdp,sessionId,fixturePath,selector:'#output-format',valueKey:'outputMime',label:'same MIME'})
+  await runCancelledExportEditRegression({cdp,sessionId,fixturePath,downloadDirectory})
+  for (const candidate of [fixturePath, corruptFixturePath, unsupportedFixturePath]) {
+    await runCancelledExportSelectionRegression({cdp,sessionId,fixturePath,downloadDirectory,candidateFixturePath:candidate,expectedSourceDimensions:candidate===fixturePath?'16 × 32 px':undefined})
+  }
+  await runFailedEncodeSettlementRegression({cdp,sessionId,fixturePath})
+  await runPendingInvalidReplacementRegression({cdp,sessionId,fixturePath,invalidFixturePath:corruptFixturePath,pendingFixturePath:cropDragFixturePath,phase:'initial in-flight',invalidLabel:'corrupt'})
+  await installPreviewDebounceGate(cdp,sessionId)
+  await runPreDebounceInvalidReplacementRegression({cdp,sessionId,fixturePath,invalidFixturePath:unsupportedFixturePath,invalidLabel:'unsupported',pendingFixturePath:cropDragFixturePath})
+  await removeE2EGates(cdp,sessionId)
+
+  // Tiny crops and rounded reduced previews must keep a single aligned frame.
+  await setFileInput(cdp,sessionId,cropDragFixturePath)
+  await waitForFullOutput(cdp,sessionId)
+  await setControlValue(cdp,sessionId,'#output-format','image/png')
+  await setControlValue(cdp,sessionId,'#aspect-ratio','free')
+  await setControlValue(cdp,sessionId,'#resize-width','1001')
+  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(3) input','7')
+  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(4) input','3')
+  await waitForFullOutput(cdp,sessionId)
+  await selectEditorView(cdp,sessionId,'compare')
+  const rounded=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.processed-preview').getBoundingClientRect(),v=document.querySelector('.comparison-viewport').getBoundingClientRect();return {quickWidth:Number(document.querySelector('.workspace').dataset.quickWidth),quickHeight:Number(document.querySelector('.workspace').dataset.quickHeight),error:Math.abs(r.width-v.width)+Math.abs(r.height-v.height)}})()`)
+  assert(rounded.quickWidth===960 && rounded.quickHeight===411 && rounded.error<1,'Rounded preview geometry drifted.')
+  await setControlValue(cdp,sessionId,'#resize-width','')
+  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(3) input','1')
+  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(4) input','1')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.processed-preview').naturalWidth===1 && document.querySelector('.processed-preview').naturalHeight===1`),'Tiny crop did not produce a 1px result.')
+
+  // Transparent output must cover the original layer with a checker/base in result mode.
+  const transparentPng=await evaluate(cdp,sessionId,`(()=>{const c=document.createElement('canvas');c.width=80;c.height=60;const x=c.getContext('2d');x.fillStyle='red';x.fillRect(0,0,40,60);return c.toDataURL().split(',')[1]})()`)
+  const transparentPath=join(dirname(cropDragFixturePath),'transparent.png')
+  await writeFile(transparentPath,Buffer.from(transparentPng,'base64'))
+  await setFileInput(cdp,sessionId,transparentPath)
+  await waitForFullOutput(cdp,sessionId)
+  await selectEditorView(cdp,sessionId,'compare')
+  await evaluate(cdp,sessionId,`document.querySelector('[data-comparison-mode="result"]').click()`)
+  const transparent=await evaluate(cdp,sessionId,`(()=>{const img=document.querySelector('.processed-preview'),c=document.createElement('canvas');c.width=80;c.height=60;const x=c.getContext('2d');x.drawImage(img,0,0);const style=getComputedStyle(document.querySelector('.comparison-result-layer'));return {alpha:x.getImageData(70,30,1,1).data[3],checker:style.backgroundImage,background:style.backgroundColor,hidden:document.querySelector('.comparison-original-layer').getAttribute('aria-hidden')}})()`)
+  assert(transparent.alpha===0 && transparent.checker!=='none' && transparent.background!=='rgba(0, 0, 0, 0)' && transparent.hidden==='true','Transparency leaked the original comparison layer.')
+  await setControlValue(cdp,sessionId,'#output-format','image/webp')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`window.__e2eBlobs.get(document.querySelector('.processed-preview').src).type==='image/webp'`),'WebP output was not encoded.')
+  await setControlValue(cdp,sessionId,'#output-format','image/jpeg')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,'window.__e2eBlobs.size===2 && window.__e2eRevoked.length>10'),'Source/rendered object URLs were not released on replacement.')
+
+  await setFileInput(cdp,sessionId,fixturePath)
+  await waitForFullOutput(cdp,sessionId)
+  const metadataBytes=await evaluate(cdp,sessionId,`(async()=>Array.from(new Uint8Array(await window.__e2eBlobs.get(document.querySelector('.processed-preview').src).arrayBuffer())))()`)
+  const metadata=detectMetadataFamilies(Buffer.from(metadataBytes))
+  assert(Object.values(metadata).every(v=>!v),'Source EXIF/GPS/ICC/XMP/IPTC/comment survived encoding.')
+  const dimensions=parseJpegDimensions(Buffer.from(metadataBytes))
+  assert(dimensions.width===16 && dimensions.height===32,'Normalized export dimensions changed.')
+  diagnostics.assertClean()
+  const requests=network.getObservedRequests()
+  assertNetworkIsLocal(requests,origin,{allowedPaths,requestLog})
+  return {layouts,pixels,comparison,capacity,races,metadata:{source:sourceFamilies,sourceExifOrientation:sourceOrientation,output:metadata},dimensions,network:formatNetworkReport(requests),browserTarget:await getTargetInfo(cdp,targetId)}
 }
 
 async function main() {
@@ -4140,12 +2105,6 @@ async function main() {
   const corruptFixturePath = join(temporaryRoot, 'e2e-corrupt-replacement.jpg')
   const unsupportedFixturePath = join(temporaryRoot, 'e2e-unsupported-replacement.gif')
   const cropDragFixturePath = join(temporaryRoot, 'e2e-crop-drag.png')
-  const roundedPreviewFixturePath = join(temporaryRoot, 'e2e-rounded-preview.png')
-  const transparencyFixturePath = join(temporaryRoot, 'e2e-transparent.png')
-  const layoutFixtures = CROP_SURFACE_SIZING_CASES.map((fixture) => ({
-    ...fixture,
-    path: join(temporaryRoot, fixture.filename),
-  }))
   await mkdir(profileDirectory)
   await mkdir(downloadDirectory)
 
@@ -4186,18 +2145,6 @@ async function main() {
     const attached = await cdp.send('Target.attachToTarget', { flatten: true, targetId: pageTargetId })
     pageSessionId = attached.sessionId
 
-    if (process.env.E2E_ONLY === 'preview-ux') {
-      report = await runPersistentComparisonRedRegression({
-        cdp,
-        fixturePath,
-        pageUrl: staticServer.pageUrl,
-        sessionId: pageSessionId,
-      })
-      console.log(JSON.stringify({ basePath, previewUxRegression: report }, null, 2))
-      console.log('Chromium E2E preview UX regression: PASS')
-      return report
-    }
-
     report = await runScenario({
       allowedPaths,
       basePath,
@@ -4206,15 +2153,12 @@ async function main() {
       cdp,
       downloadDirectory,
       fixturePath,
-      layoutFixtures,
       origin: staticServer.origin,
       pageUrl: staticServer.pageUrl,
       requestLog: staticServer.requestLog,
-      roundedPreviewFixturePath,
       sessionId: pageSessionId,
       sourceFamilies,
       sourceOrientation,
-      transparencyFixturePath,
       targetId: pageTargetId,
       unsupportedFixturePath,
     })

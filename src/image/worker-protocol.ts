@@ -91,6 +91,10 @@ function validateState(value: unknown): value is ImageEditState {
     return false
   }
 
+  if (value.straighten !== undefined &&
+    (!isFiniteNumber(value.straighten) || Math.abs(value.straighten) > 45)) {
+    return false
+  }
   if (value.zoom !== undefined && !isPositiveNumber(value.zoom)) {
     return false
   }
