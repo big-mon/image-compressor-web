@@ -104,7 +104,7 @@ function App() {
   const [quality, setQuality] = useState(0.82)
   const [editorMode, setEditorMode] = useState<'crop' | 'transform'>('crop')
   const [editorView, setEditorView] = useState<'edit' | 'compare'>('edit')
-  const [outputOpen, setOutputOpen] = useState(false)
+  const [outputOpen, setOutputOpen] = useState(true)
   const outputToggleRef = useRef<HTMLButtonElement>(null)
   const editChangedAtRef = useRef(0)
   const [compositionGuide, setCompositionGuide] = useState<CompositionGuide>('thirds')
@@ -974,8 +974,8 @@ function App() {
               </div>
             </div>
             <div className="output-menu" onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
-              <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-label={outputOpen ? '出力設定を最小化' : '出力設定を開く'} title={outputOpen ? '出力設定を最小化' : '出力設定を開く'} aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={outputOpen ? 'M5 12h14' : 'M4 6h16M4 12h16M4 18h16'} /></svg>
+              <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-label={outputOpen ? '出力設定を最小化' : '出力設定を展開'} title={outputOpen ? '出力設定を最小化' : '出力設定を展開'} aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 8h18" /><path d={outputOpen ? 'm8 13 4 4 4-4' : 'm8 17 4-4 4 4'} /></svg>
               </button>
             <aside id="output-panel" className="settings-column" aria-label="出力設定" hidden={!outputOpen}>
               <h2 className="output-menu-title">出力設定</h2>
