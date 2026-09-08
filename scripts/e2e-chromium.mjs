@@ -1945,6 +1945,12 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await clickButton(cdp,sessionId,'クロップ')
   assert(await evaluate(cdp,sessionId,`document.querySelector('select#aspect-ratio')===null && document.querySelectorAll('.aspect-preset').length===9`),'Aspect ratios must be preset buttons.')
   await waitForDom(cdp,sessionId,`document.querySelector('.crop-controls').hidden===false`, 'crop preset controls visible')
+  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="original"]').click()`)
+  await waitForDom(cdp,sessionId,`(() => {
+    const icon = document.querySelector('[data-aspect-ratio="original"] .aspect-icon').getBoundingClientRect()
+    const crop = [...document.querySelectorAll('.crop-coordinates input')].map(input => Number(input.value))
+    return Math.abs(icon.width / icon.height - 0.6) < 0.01 && Math.abs(icon.width / icon.height - crop[2] / crop[3]) < 0.01
+  })()`, 'original preset icon matches the rotated crop ratio')
   await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').focus()`)
   await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)

@@ -1071,7 +1071,7 @@ function App() {
               <div className="aspect-presets" role="group" aria-label="アスペクト比">
                 {ASPECT_OPTIONS.map(option => {
                   const [width = 1, height = 1] = option.value.split(':').map(Number)
-                  const ratio = option.value === 'original' ? asset.pixels.width / asset.pixels.height : option.value === 'free' ? 4 / 3 : width / height
+                  const ratio = option.value === 'original' ? geometry.displaySize.width / geometry.displaySize.height : option.value === 'free' ? 4 / 3 : width / height
                   return (
                     <button key={option.value} type="button" className="aspect-preset" data-aspect-ratio={option.value} aria-label={`アスペクト比 ${option.label}`} aria-pressed={editState.aspectRatio === option.value} onClick={() => setAspectRatio(option.value)}>
                       <span className="aspect-icon-box" aria-hidden="true"><span className={`aspect-icon${option.value === 'free' ? ' is-free' : ''}`} style={{ width: `${24 * Math.min(ratio, 1)}px`, height: `${24 / Math.max(ratio, 1)}px` }} /></span>
