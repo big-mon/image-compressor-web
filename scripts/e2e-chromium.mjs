@@ -1805,6 +1805,7 @@ async function setOutputPanel(cdp, sessionId, open) {
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...toggle,button:'left',clickCount:1},sessionId)
   }
   await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === ${!open}`, 'output panel state')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-toggle').getAttribute('aria-label') === '${open ? '出力設定を最小化' : '出力設定を展開'}'`),'Panel toggle must describe its current action.')
 }
 
 async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
@@ -1923,12 +1924,9 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await assertEmptyFirstView(cdp, sessionId, MOBILE_VIEWPORT, 'mobile')
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'initial quick preview')
-  await delay(800)
-  assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.every(r => r.preview)`), 'Closed output panel started an automatic full encode.')
-  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Output panel must start collapsed.')
-  await setOutputPanel(cdp, sessionId, true)
+  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'true' && !document.querySelector('#output-panel').hidden`), 'Output panel must start expanded.')
   await waitForFullOutput(cdp, sessionId)
+  assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
   const requestCount = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.requests.length')
   await setControlValue(cdp, sessionId, '#quality', '0.81')
   await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'quick preview before cancelling the scheduled full encode')
@@ -1941,7 +1939,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDownloadedFile(downloadDirectory, 'e2e-metadata-fixture-edited.jpg')
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).filter(r => !r.preview).length === 1`), 'Explicit save with a closed panel must encode exactly once.')
   assert(await evaluate(cdp, sessionId, `document.querySelector('.metrics-card .metric-line strong').textContent === '16 × 32 px'`), 'EXIF orientation was not normalized.')
-  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Output panel must start collapsed.')
+  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Saving must preserve the minimized output panel.')
   const layouts = []
   for (const viewport of [DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
     for(const open of [false,true]) {
