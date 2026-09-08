@@ -106,7 +106,7 @@ AEO / agent readiness の判断材料には、Cloudflare の [AEO](https://blog.
 
 [Notify App Hub](../.github/workflows/notify-app-hub.yml) は `main` へのpush（PRのマージを含む）と手動実行で、公開用の `big-mon/app-hub` へ `tool_updated` 通知を送る。手動実行も `main` に限る。App Hubの既存Deploy Workflowが登録済みツールをビルドしてCloudflare Pagesへ公開する。通知成功は公開成功ではないため、[App Hubの実行結果](https://github.com/big-mon/app-hub/actions/workflows/deploy.yml)と公開ファイルを確認する。
 
-初回設定では、Resource ownerを `big-mon`、Repository accessを `app-hub` のみに限定したfine-grained PATを発行し、Repository permissionsの `Contents: Read and write` を付ける。これは[repository dispatch API](https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event)の必要権限である。期限を設定し、期限前に更新する。トークンはこのrepoのActions secret `APP_HUB_DISPATCH_TOKEN` へ登録する。トークンをチャット・コマンド引数・ログへ書かず、ローカルの入力プロンプトを使う。
+初回設定では、Resource ownerを `big-mon`、Repository accessを `app-hub` のみに限定したfine-grained PATを発行し、Repository permissionsの `Contents: Read and write` を付ける。これは[repository dispatch API](https://docs.github.com/en/rest/repos/repos#create-a-repository-dispatch-event)の必要権限である。有効期限は発行時に選択する。期限ありの場合は期限前に更新し、期限なしの場合も失効・削除された際は再登録する。トークンはこのrepoのActions secret `APP_HUB_DISPATCH_TOKEN` へ登録する。トークンをチャット・コマンド引数・ログへ書かず、ローカルの入力プロンプトを使う。
 
 ```sh
 gh secret set APP_HUB_DISPATCH_TOKEN --repo big-mon/image-compressor-web
