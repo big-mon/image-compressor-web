@@ -710,8 +710,7 @@ input[type="number"]::placeholder {
   color: #718387;
 }
 
-.control-card,
-.metrics-card {
+.control-card {
   padding: 1rem;
   border: 1px solid var(--line);
   border-radius: 0.9rem;
@@ -726,9 +725,7 @@ input[type="number"]::placeholder {
 .control-row,
 .field-label-row,
 .range-label,
-.metric-line,
-.reduction-line,
-.effective-size {
+.reduction-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -860,37 +857,9 @@ input[type="range"] {
   grid-column: 1 / -1;
 }
 
-.effective-size {
-  margin-top: -0.15rem;
-  padding-top: 0.9rem;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-.effective-size strong {
-  color: var(--text);
-  font-size: 0.95rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.metrics-card {
-  display: grid;
-  gap: 0.7rem;
-  margin-top: 0.8rem;
-}
-
-.metric-line,
 .reduction-line {
   color: var(--muted);
   font-size: 0.875rem;
-}
-
-.metric-line strong {
-  color: var(--soft);
-  font-size: 0.9rem;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
 }
 
 .reduction-line {
@@ -1106,6 +1075,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .editor-shell .download-button { width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
 .editor-shell .download-button span { font-size: 0.8rem; }
 .editor-shell .workspace {
+  position: relative;
   display: grid;
   flex: 1;
   grid-template-columns: minmax(0, 1fr);
@@ -1151,43 +1121,39 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   font-weight: 400;
 }
 .output-menu {
-  position: fixed;
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 5rem - env(safe-area-inset-bottom));
   right: max(1rem, env(safe-area-inset-right));
   bottom: max(1rem, env(safe-area-inset-bottom));
   z-index: 20;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  box-shadow: 0 8px 32px #0009;
 }
+.output-menu.is-open { width: min(20rem, calc(100vw - 2rem - env(safe-area-inset-right))); }
+.output-menu-header { flex: none; display: flex; align-items: center; justify-content: flex-end; }
+.output-menu.is-open .output-menu-header { padding: 0.5rem 0.5rem 0.5rem 1rem; }
 .output-toggle {
   display: grid;
   place-items: center;
+  flex: none;
   width: 3rem;
   height: 3rem;
   padding: 0;
-  box-shadow: 0 4px 16px #0008;
 }
 .output-toggle svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.output-menu-title { margin: 0 0 1rem; font-size: 1rem; }
+.output-menu-title { margin: 0 auto 0 0; font-size: 1rem; }
 .editor-shell .settings-column {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 0.5rem);
-  width: min(20rem, calc(100vw - 2rem - env(safe-area-inset-right)));
-  max-height: calc(100dvh - 8rem - env(safe-area-inset-bottom));
-  border: 1px solid var(--line);
-  border-radius: 0.75rem;
-  box-shadow: 0 8px 32px #0009;
+  flex: 1;
   display: block;
   min-height: 0;
-  padding: 1rem;
-  background: var(--panel);
+  padding: 0.5rem 1rem 1rem;
   overflow: auto;
   overscroll-behavior: contain;
 }
-.editor-shell .output-card, .editor-shell .metrics-card { padding: 0; border: 0; border-radius: 0; }
-.editor-shell .metrics-card { padding-top: 1rem; border-top: 1px solid var(--line); margin-top: 1rem; }
-.capacity-bars { display: grid; gap: 0.65rem; font-size: 0.8rem; color: var(--muted); }
-.capacity-track { height: 0.6rem; margin-top: 0.3rem; overflow: hidden; border-radius: 1rem; background: #333; }
-.capacity-track span { display: block; height: 100%; background: #a0a0a0; }
-.result-capacity span { background: var(--mint); }
 .editor-bottom {
   position: relative;
   flex: none;
@@ -1195,7 +1161,6 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
-.editor-shell .editor-bottom { padding-right: calc(4rem + max(1rem, env(safe-area-inset-right))); }
 .mode-controls { display: flex; align-items: center; justify-content: center; gap: 1rem; }
 .crop-controls { flex-wrap: wrap; }
 .crop-controls .field-help { display: none; }
@@ -1261,7 +1226,6 @@ input[type="number"], select { background-color: #101010; }
   .editor-shell .crop-stage-meta { display: none; }
 }
 
-.settings-column > .resize-fields { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 @media (max-height: 500px) {
   .editor-shell .stage-area { padding: 0.5rem; }
   .editor-shell .crop-handle { right: 0; bottom: 0; }
@@ -1298,3 +1262,7 @@ input[type="number"], select { background-color: #101010; }
   .aspect-presets { flex: 1 1 0; }
   .crop-controls .guide-control, .crop-controls .advanced-controls { flex: none; }
 }
+
+.compression-section { border-top: 1px solid var(--line); padding-bottom: 0.5rem; }
+.compression-section summary { min-height: 2.75rem; padding: 0.75rem 0; cursor: pointer; font-weight: 700; }
+.compression-section:not([open]) { padding-bottom: 0; }

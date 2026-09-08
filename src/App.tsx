@@ -14,7 +14,6 @@ import {
   type CropRect,
   type ImageEditState,
   type CropBounds,
-  type Size,
 } from './image/geometry'
 import {
   calculateMetrics,
@@ -77,20 +76,6 @@ interface CropInteraction {
   readonly startY: number
   readonly startEffectiveCrop: CropRect
   readonly displaySize: CropBounds
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
-}
-
-function formatDimensions(size: Size | undefined): string {
-  return size ? `${Math.round(size.width)} × ${Math.round(size.height)} px` : '—'
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -973,50 +958,40 @@ function App() {
                 <span className="stage-preview-label">{editorView === 'edit' ? '元画像（切り抜き編集）' : renderedIsPreview ? 'クイック確認' : '保存用画像'}</span>
               </div>
             </div>
-            <div className="output-menu" onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
-              <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-label={outputOpen ? '出力設定を最小化' : '出力設定を展開'} title={outputOpen ? '出力設定を最小化' : '出力設定を展開'} aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>
+            <div className={`output-menu${outputOpen ? ' is-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
+              <div className="output-menu-header">
+                <h2 className="output-menu-title" hidden={!outputOpen}>圧縮</h2>
+              <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-label={outputOpen ? '圧縮を最小化' : '圧縮を展開'} title={outputOpen ? '圧縮を最小化' : '圧縮を展開'} aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 8h18" /><path d={outputOpen ? 'm8 13 4 4 4-4' : 'm8 17 4-4 4 4'} /></svg>
               </button>
-            <aside id="output-panel" className="settings-column" aria-label="出力設定" hidden={!outputOpen}>
-              <h2 className="output-menu-title">出力設定</h2>
-                <div className="control-card output-card">
-                  <label className="field-label" htmlFor="output-format">形式</label>
+              </div>
+            <aside id="output-panel" className="settings-column" aria-label="圧縮" hidden={!outputOpen}>
+                <details className="compression-section" id="quality-settings">
+                  <summary>画質</summary>
+                  {outputMime === 'image/png' ? (
+                    <p className="comparison-quality-note">PNGでは画質の設定はありません。</p>
+                  ) : (
+                    <div className="range-control">
+                      <div className="range-label"><label htmlFor="quality">画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
+                      <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
+                    </div>
+                  )}
+                </details>
+                <details className="compression-section" id="format-settings">
+                  <summary>形式</summary>
+                  <label className="visually-hidden" htmlFor="output-format">形式</label>
                   <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
                     {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
-
-                    {outputMime === 'image/png' ? (
-                      <p className="comparison-quality-note">PNGでは保存画質の設定はありません。</p>
-                    ) : (
-                      <div className="range-control comparison-quality-control">
-                        <div className="range-label"><label htmlFor="quality">保存画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
-                        <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} aria-describedby="quality-help" onChange={(event) => updateQuality(Number(event.target.value))} />
-                        <span id="quality-help" className="field-help">軽く ← → きれい · 容量の削減率とは異なります。</span>
-                      </div>
-                    )}
-
-                  <div className="effective-size">
-                    <span>有効な出力寸法</span>
-                    <strong>{formatDimensions(geometry.outputSize)}</strong>
-                  </div>
-                </div>
-
-                <div className="metrics-card" aria-label="画像メトリクス">
-                  <div className="metric-line"><span>元画像</span><strong>{formatDimensions({ width: asset.pixels.width, height: asset.pixels.height })}</strong></div>
-                  <div className="metric-line"><span>元の容量</span><strong>{formatBytes(asset.file.size)}</strong></div>
-                  <div className="capacity-bars" aria-label="元画像と保存結果の容量比較">
-                    <div><span>元画像</span><div className="capacity-track"><span style={{ width: `${asset.file.size / Math.max(asset.file.size, fullOutputResult?.bytes ?? 0, 1) * 100}%` }} /></div></div>
-                    <div><span>保存結果</span><div className="capacity-track result-capacity"><span style={{ width: fullOutputResult ? `${fullOutputResult.bytes / Math.max(asset.file.size, fullOutputResult.bytes, 1) * 100}%` : '0%' }} /></div></div>
-                  </div>
-                  <div className="metric-line full-output-metrics"><span>保存用画像寸法</span><strong className="full-output-dimensions">{fullOutputMetrics ? formatDimensions({ width: fullOutputMetrics.outputWidth, height: fullOutputMetrics.outputHeight }) : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
-                  <div className="metric-line full-output-bytes"><span>保存用画像容量</span><strong className="full-output-bytes-value">{fullOutputMetrics ? formatBytes(fullOutputMetrics.outputBytes) : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
-                  <div className="reduction-line"><span>容量の変化（保存用画像）</span><strong>{fullOutputMetrics ? `${fullOutputMetrics.reductionPercent >= 0 ? '−' : '+'}${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}%` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
-                </div>
+                </details>
+                <details className="compression-section" id="resize-settings">
+                  <summary>出力サイズ</summary>
                   <div className="resize-fields">
-                    <div className="field-label-row"><span className="field-label">出力サイズ</span><span className="field-help">幅または高さ</span></div>
                     <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
                     <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
                   </div>
+                </details>
+                <div className="reduction-line" role="status" aria-live="polite"><strong>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
             </aside>

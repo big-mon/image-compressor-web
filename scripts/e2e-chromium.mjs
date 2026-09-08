@@ -729,12 +729,10 @@ async function readPr8State(cdp, sessionId) {
   return evaluate(cdp, sessionId, `(() => {
     const source = document.querySelector('.stage-image')
     const preview = document.querySelector('.processed-preview')
-    const readDimensions = (selector) => document.querySelector(selector)?.textContent?.trim() ?? ''
     return {
       busy: document.querySelector('.status-chip')?.classList.contains('is-busy') ?? false,
       crop: [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value),
       downloadDisabled: document.querySelector('.download-button')?.disabled ?? true,
-      effectiveSize: readDimensions('.effective-size strong'),
       error: document.querySelector('.error-message')?.textContent?.trim() ?? '',
       outputMime: document.querySelector('#output-format')?.value ?? '',
       pending: document.querySelector('.comparison-empty') !== null && document.querySelector('.comparison-empty')?.textContent?.includes('更新中') === true,
@@ -742,7 +740,7 @@ async function readPr8State(cdp, sessionId) {
       previewNaturalWidth: preview instanceof HTMLImageElement ? preview.naturalWidth : 0,
       previewUrl: preview instanceof HTMLImageElement ? preview.src : '',
       renderedSize: document.querySelector('.workspace')?.dataset.quickWidth + ' × ' + document.querySelector('.workspace')?.dataset.quickHeight + ' px',
-      sourceDimensions: readDimensions('.metrics-card .metric-line:first-child strong'),
+      sourceDimensions: source ? source.naturalWidth + ' × ' + source.naturalHeight + ' px' : '',
       sourceUrl: source instanceof HTMLImageElement ? source.src : '',
       status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
       quality: Number(document.querySelector('#quality')?.value),
@@ -860,13 +858,6 @@ async function captureToolLayout(cdp, sessionId) {
         visibility: style.visibility,
       }
     }
-    const readDimensions = (selector) => {
-      const text = document.querySelector(selector)?.textContent?.trim() ?? ''
-      const values = text.replace(' px', '').split(' × ').map(Number)
-      return values.length === 2 && values.every((value) => Number.isFinite(value))
-        ? { width: values[0], height: values[1] }
-        : null
-    }
     const dropZone = document.querySelector('.drop-zone')
     const advancedControls = document.querySelector('.advanced-controls')
     const privacyDetails = document.querySelector('.privacy-details')
@@ -912,10 +903,8 @@ async function captureToolLayout(cdp, sessionId) {
       processedPreview: describeProcessedPreview(document.querySelector('.processed-preview')),
       processedPreviewCount: document.querySelectorAll('.processed-preview').length,
       renderedSize: document.querySelector('.workspace')?.dataset.quickWidth + ' × ' + document.querySelector('.workspace')?.dataset.quickHeight + ' px',
-      fullOutputSize: readDimensions('.full-output-dimensions'),
       settings: describe('.settings-column'),
       sourceImageCount: document.querySelectorAll('.stage-image').length,
-      sourceMetrics: describe('.metrics-card .metric-line:first-child strong'),
       status: document.querySelector('.status-chip')?.textContent?.trim() ?? '',
       stageArea: describe('.stage-area'),
       stageMeta: describe('.crop-stage-meta'),
@@ -1236,6 +1225,8 @@ async function setControlValue(cdp, sessionId, selector, value) {
   await evaluate(cdp, sessionId, `(() => {
     const element = document.querySelector(${quotedSelector})
     if (!element) throw new Error('Control not found: ' + ${quotedSelector})
+    const section = element.closest('.compression-section')
+    if (section && !section.open) section.querySelector('summary').click()
     const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
     const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
     if (!setter) throw new Error('Control value setter is unavailable: ' + ${quotedSelector})
@@ -1444,11 +1435,11 @@ async function runPendingInvalidReplacementRegression({ cdp, fixturePath, invali
 
     if (phase === 'initial in-flight') {
       await setFileInput(cdp, sessionId, pendingFixturePath)
-      await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(baseline.sourceUrl)} && document.querySelector('.metrics-card .metric-line:first-child strong')?.textContent?.trim() === '1000 × 600 px'`, `${invalidLabel} pending source commit`)
+      await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(baseline.sourceUrl)} && document.querySelector('.stage-image')?.naturalWidth === 1000 && document.querySelector('.stage-image')?.naturalHeight === 600`, `${invalidLabel} pending source commit`)
     } else {
       await openDetails(cdp, sessionId, '.advanced-controls')
       await setControlValue(cdp, sessionId, '#resize-width', '8')
-      await waitForDom(cdp, sessionId, `document.querySelector('.effective-size strong')?.textContent?.trim() === '8 × 16 px'`, `${invalidLabel} edited output dimensions`)
+      await waitForDom(cdp, sessionId, `document.querySelector('#resize-width')?.value === '8'`, `${invalidLabel} edited output dimensions`)
     }
 
     const pending = await waitFor(async () => {
@@ -1805,7 +1796,7 @@ async function setOutputPanel(cdp, sessionId, open) {
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...toggle,button:'left',clickCount:1},sessionId)
   }
   await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === ${!open}`, 'output panel state')
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-toggle').getAttribute('aria-label') === '${open ? '出力設定を最小化' : '出力設定を展開'}'`),'Panel toggle must describe its current action.')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-toggle').getAttribute('aria-label') === '${open ? '圧縮を最小化' : '圧縮を展開'}'`),'Panel toggle must describe its current action.')
 }
 
 async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
@@ -1820,7 +1811,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
       scrollHeight:document.documentElement.scrollHeight, scrollWidth:document.documentElement.scrollWidth,
       fullscreen:document.fullscreenElement !== null, headings:document.querySelectorAll('.workspace h2:not(.output-menu-title)').length,
       footer:document.querySelector('footer') !== null,
-      toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
+      viewSwitch:rect('.view-switch'), menu:rect('.output-menu'), menuHeader:rect('.output-menu-header'), toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
       headerToggle:document.querySelector('.tool-toolbar .output-toggle') !== null,
       panelOnTop:(()=>{const p=document.querySelector('#output-panel'),r=p.getBoundingClientRect();return p.contains(document.elementFromPoint(r.x+r.width/2,r.y+20))})(),
       buttons:[...document.querySelectorAll('.tool-toolbar button,.edit-modes button,.output-toggle')].map(b=>({height:b.getBoundingClientRect().height,width:b.getBoundingClientRect().width})),
@@ -1834,23 +1825,24 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(layout.surface.width > 0 && layout.surface.height >= 80 && inside(layout.surface), `Image does not fit: ${JSON.stringify(layout)}`)
   assert(layout.surface.bottom <= layout.bottom.y && layout.stage.bottom <= layout.bottom.y + 1, 'Image overlaps the bottom controls.')
   assert(layout.buttons.every(b => b.height >= 44 && b.width >= 44), 'Primary buttons must have 44px tap targets.')
-  assert(!layout.headerToggle && layout.menuPosition==='fixed' && inside(layout.toggle), 'Output menu must be fixed outside the header.')
-  assert(viewport.width-layout.toggle.right <= 17 && viewport.height-layout.toggle.bottom <= 17,'Menu is not at the bottom right.')
+  assert(!layout.headerToggle && layout.menuPosition==='absolute' && inside(layout.toggle), 'Output menu must overlay the image workspace.')
+  assert(viewport.width-layout.menu.right <= 17 && layout.editor.bottom-layout.menu.bottom <= 17,'Menu is not at the bottom right of the image workspace.')
+  assert(layout.toggle.x >= layout.menuHeader.x && layout.toggle.right <= layout.menuHeader.right && layout.toggle.y >= layout.menuHeader.y && layout.toggle.bottom <= layout.menuHeader.bottom,'Toggle must be inside the menu header.')
+  assert(layout.menu.bottom <= layout.bottom.y, 'Compression menu overlaps the bottom editing controls.')
   assert(layout.editor.width===closedEditor.width && layout.editor.height===closedEditor.height,'Opening settings resized the image area.')
   if (panelOpen) {
+    assert(layout.menu.y >= layout.viewSwitch.bottom, 'Compression menu must not cover the edit/compare switch or save button.')
     assert(inside(layout.panel) && layout.panel.height > 0 && layout.panelOnTop, 'Output panel must be visible above the image.')
     assert(layout.panel.x < layout.editor.right && layout.panel.y < layout.editor.bottom, 'Output panel must overlap the editor.')
-    assert(layout.panel.bottom < layout.toggle.y, 'Menu toggle must remain reachable below the panel.')
-    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel');p.scrollTop=p.scrollHeight;const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom;p.scrollTop=0;return visible})()`)
+    assert(layout.toggle.bottom <= layout.panel.y && layout.menu.right-layout.toggle.right <= 10, 'Toggle must be at the top right of the menu.')
+    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),d=document.querySelector('#resize-settings'),wasOpen=d.open;d.open=true;p.querySelector('#resize-height').scrollIntoView({block:'nearest'});const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));p.scrollTop=0;d.open=wasOpen;return visible})()`)
     assert(scroll,'Output settings at the bottom are not reachable.')
   }
-  if (!panelOpen) {
-    for (const mode of ['傾き・反転','クロップ']) {
-      const point = await evaluate(cdp,sessionId,`(()=>{const b=[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')),r=b.getBoundingClientRect();return {x:r.right-4,y:r.bottom-8}})()`)
-      await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
-      await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
-      assert(await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')).getAttribute('aria-pressed')==='true' && document.querySelector('#output-panel').hidden`),'Floating toggle intercepted the edit-mode button: '+mode)
-    }
+  for (const mode of ['傾き・反転','クロップ']) {
+    const point = await evaluate(cdp,sessionId,`(()=>{const b=[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')),r=b.getBoundingClientRect();return {x:r.right-4,y:r.bottom-8}})()`)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
+    assert(await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')).getAttribute('aria-pressed')==='true' && document.querySelector('#output-panel').hidden===${!panelOpen}`),'Floating toggle intercepted the edit-mode button: '+mode)
   }
   return layout
 }
@@ -1927,6 +1919,18 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'true' && !document.querySelector('#output-panel').hidden`), 'Output panel must start expanded.')
   await waitForFullOutput(cdp, sessionId)
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-menu-title').textContent==='圧縮' && [...document.querySelectorAll('.compression-section')].length===3 && [...document.querySelectorAll('.compression-section')].every(d=>!d.open) && !document.querySelector('.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must initially show collapsed settings and only the reduction result.')
+  for (const id of ['quality-settings','format-settings','resize-settings']) {
+    const point = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('#${id} summary').getBoundingClientRect();return {x:r.x+30,y:r.y+r.height/2}})()`)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
+    assert(await evaluate(cdp,sessionId,`document.querySelector('#${id}').open`),'Compression section did not expand.')
+    await evaluate(cdp,sessionId,`document.querySelector('#${id} summary').focus()`)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId)
+    assert(await evaluate(cdp,sessionId,`!document.querySelector('#${id}').open`),'Compression section did not collapse with keyboard.')
+  }
+  await captureScreenshot(cdp,sessionId,'compression-collapsed.png')
   const requestCount = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.requests.length')
   await setControlValue(cdp, sessionId, '#quality', '0.81')
   await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'quick preview before cancelling the scheduled full encode')
@@ -1938,7 +1942,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForFullOutput(cdp, sessionId)
   await waitForDownloadedFile(downloadDirectory, 'e2e-metadata-fixture-edited.jpg')
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).filter(r => !r.preview).length === 1`), 'Explicit save with a closed panel must encode exactly once.')
-  assert(await evaluate(cdp, sessionId, `document.querySelector('.metrics-card .metric-line strong').textContent === '16 × 32 px'`), 'EXIF orientation was not normalized.')
+  assert(await evaluate(cdp, sessionId, `document.querySelector('.stage-image').naturalWidth === 16 && document.querySelector('.stage-image').naturalHeight === 32`), 'EXIF orientation was not normalized.')
   assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Saving must preserve the minimized output panel.')
   const layouts = []
   for (const viewport of [DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
@@ -1949,7 +1953,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await setOutputPanel(cdp,sessionId,true)
-  await evaluate(cdp,sessionId, `document.querySelector('#output-format').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+  await evaluate(cdp,sessionId, `document.querySelector('#quality-settings summary').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
   await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && document.activeElement === document.querySelector('.output-toggle')`, 'Escape closes panel and restores focus')
   await setOutputPanel(cdp,sessionId,true)
 
@@ -2076,8 +2080,9 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForFullOutput(cdp,sessionId)
   const bytes=await evaluate(cdp,sessionId,`(async()=>{const i=document.querySelector('.processed-preview');return Array.from(new Uint8Array(await window.__e2eBlobs.get(i.src).arrayBuffer()))})()`)
   const expectedBytes=Buffer.from(bytes)
-  const capacity=await evaluate(cdp,sessionId,`({bytes:Number(document.querySelector('.processed-preview').dataset.outputBytes),bars:[...document.querySelectorAll('.capacity-track span')].map(e=>parseFloat(e.style.width)),reduction:document.querySelector('.reduction-line strong').textContent})`)
-  assert(capacity.bytes===expectedBytes.length && Math.max(...capacity.bars)===100,'Capacity bars do not reflect the full Blob.')
+  const capacity=await evaluate(cdp,sessionId,`({bytes:Number(document.querySelector('.processed-preview').dataset.outputBytes),reduction:document.querySelector('.reduction-line strong').textContent})`)
+  const expectedReduction = (1 - expectedBytes.length / (await readFile(cropDragFixturePath)).length) * 100
+  assert(capacity.bytes===expectedBytes.length && capacity.reduction===Math.abs(expectedReduction).toFixed(1)+'% '+(expectedReduction>=0?'削減':'増加'),'Reduction does not reflect the full Blob.')
   await installWorkerProcessGate(cdp,sessionId)
   await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.arm()')
   await clickButton(cdp,sessionId,'保存 .')
@@ -2123,7 +2128,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.injectError()')
   await waitForDom(cdp,sessionId,`document.querySelector('.verify-output-button') !== null && !document.querySelector('.status-chip').classList.contains('is-busy')`,'recoverable full error')
   await delay(700)
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.full-output-bytes-value').textContent==='計算できませんでした'`),'Failed output was presented as measured.')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.reduction-line strong').textContent==='計算できませんでした'`),'Failed output was presented as measured.')
   await clickButton(cdp,sessionId,'容量計算を再試行')
   await waitForFullOutput(cdp,sessionId)
 
