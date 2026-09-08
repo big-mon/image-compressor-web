@@ -710,8 +710,7 @@ input[type="number"]::placeholder {
   color: #718387;
 }
 
-.control-card,
-.metrics-card {
+.control-card {
   padding: 1rem;
   border: 1px solid var(--line);
   border-radius: 0.9rem;
@@ -726,9 +725,7 @@ input[type="number"]::placeholder {
 .control-row,
 .field-label-row,
 .range-label,
-.metric-line,
-.reduction-line,
-.effective-size {
+.reduction-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -860,37 +857,9 @@ input[type="range"] {
   grid-column: 1 / -1;
 }
 
-.effective-size {
-  margin-top: -0.15rem;
-  padding-top: 0.9rem;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-.effective-size strong {
-  color: var(--text);
-  font-size: 0.95rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.metrics-card {
-  display: grid;
-  gap: 0.7rem;
-  margin-top: 0.8rem;
-}
-
-.metric-line,
 .reduction-line {
   color: var(--muted);
   font-size: 0.875rem;
-}
-
-.metric-line strong {
-  color: var(--soft);
-  font-size: 0.9rem;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
 }
 
 .reduction-line {
@@ -1181,12 +1150,6 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   overflow: auto;
   overscroll-behavior: contain;
 }
-.editor-shell .output-card, .editor-shell .metrics-card { padding: 0; border: 0; border-radius: 0; }
-.editor-shell .metrics-card { padding-top: 1rem; border-top: 1px solid var(--line); margin-top: 1rem; }
-.capacity-bars { display: grid; gap: 0.65rem; font-size: 0.8rem; color: var(--muted); }
-.capacity-track { height: 0.6rem; margin-top: 0.3rem; overflow: hidden; border-radius: 1rem; background: #333; }
-.capacity-track span { display: block; height: 100%; background: #a0a0a0; }
-.result-capacity span { background: var(--mint); }
 .editor-bottom {
   position: relative;
   flex: none;
@@ -1260,7 +1223,6 @@ input[type="number"], select { background-color: #101010; }
   .editor-shell .crop-stage-meta { display: none; }
 }
 
-.settings-column > .resize-fields { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 @media (max-height: 500px) {
   .editor-shell .stage-area { padding: 0.5rem; }
   .editor-shell .crop-handle { right: 0; bottom: 0; }
@@ -1297,3 +1259,7 @@ input[type="number"], select { background-color: #101010; }
   .aspect-presets { flex: 1 1 0; }
   .crop-controls .guide-control, .crop-controls .advanced-controls { flex: none; }
 }
+
+.compression-section { border-top: 1px solid var(--line); padding-bottom: 0.5rem; }
+.compression-section summary { min-height: 2.75rem; padding: 0.75rem 0; cursor: pointer; font-weight: 700; }
+.compression-section:not([open]) { padding-bottom: 0; }

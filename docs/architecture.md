@@ -20,13 +20,13 @@ File/drop
   → App の object URL、metrics、download
 ```
 
-`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、出力設定パネルを開いている間に限り、編集停止から600ms経過し quick preview が完了すると full output size を自動で要求する。失敗時の再試行と download も full output size を要求する。同じ編集 intent の確認済み full result があれば download はその Blob を再利用する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
+`App` は編集変更後に debounce された reduced-resolution の quick preview を要求し、圧縮パネルを開いている間に限り、編集停止から600ms経過し quick preview が完了すると full output size を自動で要求する。失敗時の再試行と download も full output size を要求する。同じ編集 intent の確認済み full result があれば download はその Blob を再利用する。quick/full の容量値と比較表示はそれぞれの result identity に結び付き、両者は同じ geometry の crop/transform semantics を共有する。実装の詳細は [App.tsx](../src/App.tsx) と [raster.ts](../src/image/raster.ts) を参照する。
 
 ## Module contracts and seams
 
 | module | stable interface / ownership |
 | --- | --- |
-| `src/App.tsx` | browser UI、File input/drop、編集 intent、単一画像領域の編集・比較切替、折りたたみ出力設定、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
+| `src/App.tsx` | browser UI、File input/drop、編集 intent、単一画像領域の編集・比較切替、折りたたみ圧縮、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
 | `src/image/stage.ts` | `createStageTransform` と crop surface style。CSS 表示文字列だけを組み立て、Canvas のピクセル処理は所有しない。 |
@@ -40,11 +40,11 @@ File/drop
 
 比較は全体表示の重ね合わせに固定し、画像領域の Pointer capture 中の座標を画像幅に対する0〜100%へ制限して境界を操作する。キーボード操作は native range input に委ね、input 自体はポインターの対象から外してタッチ時の標準ドラッグとの競合を避ける。Chromium E2E でマウス・タッチ・キーボード操作と画像端への制限を確認する。
 
-出力設定は初期状態で開き、画像領域を縮めず上に重ねる。メニュー右上のパネルアイコンで最小化・展開し、展開してもパネルの幅は変えない。最小化時はアイコンだけの小さな枠を残し、設定本文をスクロールしても見出しとアイコンは固定する。小さい画面ではパネル内をスクロールできる。最小化ボタンと Escape で閉じられ、Escape は開閉ボタンへフォーカスを戻す。
+圧縮は初期状態で開き、画像領域を縮めず上に重ねる。メニュー右上のパネルアイコンで最小化・展開し、展開してもパネルの幅は変えない。最小化時はアイコンだけの小さな枠を残し、設定本文をスクロールしても見出しとアイコンは固定する。画質・形式・出力サイズは native details で初期状態では折りたたむ。小さい画面ではパネル内をスクロールできる。最小化ボタンと Escape で閉じられ、Escape は開閉ボタンへフォーカスを戻す。
 
 ## State, cache, and stale requests
 
-full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中および出力設定パネルを閉じたときはタイマーを破棄する。すでに開始したfull処理は中断せず完了まで継続するため、その間の新しいpreviewは既存schedulerの契約どおり待機する。失敗時は自動ループを止めて再試行を提示する。容量バーはmetadata strip後のfull Blobと元Fileのbytesを共通スケールで表示し、容量増加も許容する。quickのbytesは保存容量として表示しない。
+full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中および圧縮パネルを閉じたときはタイマーを破棄する。すでに開始したfull処理は中断せず完了まで継続するため、その間の新しいpreviewは既存schedulerの契約どおり待機する。失敗時は自動ループを止めて再試行を提示する。削減率はmetadata strip後のfull Blobと元Fileのbytesから計算し、容量が増えた場合は増加率として表示する。quickのbytesは保存容量として表示しない。
 
 1. File を受け取ると `App` は candidate として MIME を検査し、decode 完了を `fileLoadGeneration` で guard する。candidate の読み込み中・失敗時は committed source、編集、result URL、現行 preview の debounce/in-flight work を保持する。新しい選択は論理的に obsolete な export と candidate を無効化し、比較表示を解放する。
 2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。reset は candidate generation を進めて candidate を取り消し、committed source の編集だけを再処理する。
