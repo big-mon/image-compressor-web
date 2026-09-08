@@ -1820,7 +1820,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
       scrollHeight:document.documentElement.scrollHeight, scrollWidth:document.documentElement.scrollWidth,
       fullscreen:document.fullscreenElement !== null, headings:document.querySelectorAll('.workspace h2:not(.output-menu-title)').length,
       footer:document.querySelector('footer') !== null,
-      toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
+      menu:rect('.output-menu'), menuHeader:rect('.output-menu-header'), toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
       headerToggle:document.querySelector('.tool-toolbar .output-toggle') !== null,
       panelOnTop:(()=>{const p=document.querySelector('#output-panel'),r=p.getBoundingClientRect();return p.contains(document.elementFromPoint(r.x+r.width/2,r.y+20))})(),
       buttons:[...document.querySelectorAll('.tool-toolbar button,.edit-modes button,.output-toggle')].map(b=>({height:b.getBoundingClientRect().height,width:b.getBoundingClientRect().width})),
@@ -1835,13 +1835,15 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(layout.surface.bottom <= layout.bottom.y && layout.stage.bottom <= layout.bottom.y + 1, 'Image overlaps the bottom controls.')
   assert(layout.buttons.every(b => b.height >= 44 && b.width >= 44), 'Primary buttons must have 44px tap targets.')
   assert(!layout.headerToggle && layout.menuPosition==='fixed' && inside(layout.toggle), 'Output menu must be fixed outside the header.')
-  assert(viewport.width-layout.toggle.right <= 17 && viewport.height-layout.toggle.bottom <= 17,'Menu is not at the bottom right.')
+  assert(viewport.width-layout.menu.right <= 17 && viewport.height-layout.menu.bottom <= 17,'Menu is not at the bottom right.')
+  assert(layout.toggle.x >= layout.menuHeader.x && layout.toggle.right <= layout.menuHeader.right && layout.toggle.y >= layout.menuHeader.y && layout.toggle.bottom <= layout.menuHeader.bottom,'Toggle must be inside the menu header.')
   assert(layout.editor.width===closedEditor.width && layout.editor.height===closedEditor.height,'Opening settings resized the image area.')
   if (panelOpen) {
+    assert(layout.menu.y >= layout.header.bottom, 'Output menu must not cover the save button.')
     assert(inside(layout.panel) && layout.panel.height > 0 && layout.panelOnTop, 'Output panel must be visible above the image.')
     assert(layout.panel.x < layout.editor.right && layout.panel.y < layout.editor.bottom, 'Output panel must overlap the editor.')
-    assert(layout.panel.bottom < layout.toggle.y, 'Menu toggle must remain reachable below the panel.')
-    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel');p.scrollTop=p.scrollHeight;const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom;p.scrollTop=0;return visible})()`)
+    assert(layout.toggle.bottom <= layout.panel.y && layout.menu.right-layout.toggle.right <= 10, 'Toggle must be at the top right of the menu.')
+    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel');p.scrollTop=p.scrollHeight;const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));p.scrollTop=0;return visible})()`)
     assert(scroll,'Output settings at the bottom are not reachable.')
   }
   if (!panelOpen) {

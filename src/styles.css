@@ -1155,30 +1155,29 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   right: max(1rem, env(safe-area-inset-right));
   bottom: max(1rem, env(safe-area-inset-bottom));
   z-index: 20;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--panel);
+  box-shadow: 0 8px 32px #0009;
 }
+.output-menu.is-open { width: min(20rem, calc(100vw - 2rem - env(safe-area-inset-right))); }
+.output-menu-header { display: flex; align-items: center; justify-content: flex-end; }
+.output-menu.is-open .output-menu-header { padding: 0.5rem 0.5rem 0.5rem 1rem; }
 .output-toggle {
   display: grid;
   place-items: center;
+  flex: none;
   width: 3rem;
   height: 3rem;
   padding: 0;
-  box-shadow: 0 4px 16px #0008;
 }
 .output-toggle svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.output-menu-title { margin: 0 0 1rem; font-size: 1rem; }
+.output-menu-title { margin: 0 auto 0 0; font-size: 1rem; }
 .editor-shell .settings-column {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 0.5rem);
-  width: min(20rem, calc(100vw - 2rem - env(safe-area-inset-right)));
-  max-height: calc(100dvh - 8rem - env(safe-area-inset-bottom));
-  border: 1px solid var(--line);
-  border-radius: 0.75rem;
-  box-shadow: 0 8px 32px #0009;
+  max-height: calc(100dvh - 9rem - env(safe-area-inset-bottom));
   display: block;
   min-height: 0;
-  padding: 1rem;
-  background: var(--panel);
+  padding: 0.5rem 1rem 1rem;
   overflow: auto;
   overscroll-behavior: contain;
 }

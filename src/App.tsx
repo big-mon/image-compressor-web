@@ -973,12 +973,14 @@ function App() {
                 <span className="stage-preview-label">{editorView === 'edit' ? '元画像（切り抜き編集）' : renderedIsPreview ? 'クイック確認' : '保存用画像'}</span>
               </div>
             </div>
-            <div className="output-menu" onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
+            <div className={`output-menu${outputOpen ? ' is-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
+              <div className="output-menu-header">
+                <h2 className="output-menu-title" hidden={!outputOpen}>出力設定</h2>
               <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-label={outputOpen ? '出力設定を最小化' : '出力設定を展開'} title={outputOpen ? '出力設定を最小化' : '出力設定を展開'} aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 8h18" /><path d={outputOpen ? 'm8 13 4 4 4-4' : 'm8 17 4-4 4 4'} /></svg>
               </button>
+              </div>
             <aside id="output-panel" className="settings-column" aria-label="出力設定" hidden={!outputOpen}>
-              <h2 className="output-menu-title">出力設定</h2>
                 <div className="control-card output-card">
                   <label className="field-label" htmlFor="output-format">形式</label>
                   <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
