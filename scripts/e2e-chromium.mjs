@@ -1811,7 +1811,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
       scrollHeight:document.documentElement.scrollHeight, scrollWidth:document.documentElement.scrollWidth,
       fullscreen:document.fullscreenElement !== null, headings:document.querySelectorAll('.workspace h2:not(.output-menu-title)').length,
       footer:document.querySelector('footer') !== null,
-      menu:rect('.output-menu'), menuHeader:rect('.output-menu-header'), toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
+      viewSwitch:rect('.view-switch'), menu:rect('.output-menu'), menuHeader:rect('.output-menu-header'), toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
       headerToggle:document.querySelector('.tool-toolbar .output-toggle') !== null,
       panelOnTop:(()=>{const p=document.querySelector('#output-panel'),r=p.getBoundingClientRect();return p.contains(document.elementFromPoint(r.x+r.width/2,r.y+20))})(),
       buttons:[...document.querySelectorAll('.tool-toolbar button,.edit-modes button,.output-toggle')].map(b=>({height:b.getBoundingClientRect().height,width:b.getBoundingClientRect().width})),
@@ -1825,25 +1825,24 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(layout.surface.width > 0 && layout.surface.height >= 80 && inside(layout.surface), `Image does not fit: ${JSON.stringify(layout)}`)
   assert(layout.surface.bottom <= layout.bottom.y && layout.stage.bottom <= layout.bottom.y + 1, 'Image overlaps the bottom controls.')
   assert(layout.buttons.every(b => b.height >= 44 && b.width >= 44), 'Primary buttons must have 44px tap targets.')
-  assert(!layout.headerToggle && layout.menuPosition==='fixed' && inside(layout.toggle), 'Output menu must be fixed outside the header.')
-  assert(viewport.width-layout.menu.right <= 17 && viewport.height-layout.menu.bottom <= 17,'Menu is not at the bottom right.')
+  assert(!layout.headerToggle && layout.menuPosition==='absolute' && inside(layout.toggle), 'Output menu must overlay the image workspace.')
+  assert(viewport.width-layout.menu.right <= 17 && layout.editor.bottom-layout.menu.bottom <= 17,'Menu is not at the bottom right of the image workspace.')
   assert(layout.toggle.x >= layout.menuHeader.x && layout.toggle.right <= layout.menuHeader.right && layout.toggle.y >= layout.menuHeader.y && layout.toggle.bottom <= layout.menuHeader.bottom,'Toggle must be inside the menu header.')
+  assert(layout.menu.bottom <= layout.bottom.y, 'Compression menu overlaps the bottom editing controls.')
   assert(layout.editor.width===closedEditor.width && layout.editor.height===closedEditor.height,'Opening settings resized the image area.')
   if (panelOpen) {
-    assert(layout.menu.y >= layout.header.bottom, 'Output menu must not cover the save button.')
+    assert(layout.menu.y >= layout.viewSwitch.bottom, 'Compression menu must not cover the edit/compare switch or save button.')
     assert(inside(layout.panel) && layout.panel.height > 0 && layout.panelOnTop, 'Output panel must be visible above the image.')
     assert(layout.panel.x < layout.editor.right && layout.panel.y < layout.editor.bottom, 'Output panel must overlap the editor.')
     assert(layout.toggle.bottom <= layout.panel.y && layout.menu.right-layout.toggle.right <= 10, 'Toggle must be at the top right of the menu.')
-    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),d=document.querySelector('#resize-settings'),wasOpen=d.open;d.open=true;p.scrollTop=p.scrollHeight;const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));p.scrollTop=0;d.open=wasOpen;return visible})()`)
+    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),d=document.querySelector('#resize-settings'),wasOpen=d.open;d.open=true;p.querySelector('#resize-height').scrollIntoView({block:'nearest'});const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));p.scrollTop=0;d.open=wasOpen;return visible})()`)
     assert(scroll,'Output settings at the bottom are not reachable.')
   }
-  if (!panelOpen) {
-    for (const mode of ['傾き・反転','クロップ']) {
-      const point = await evaluate(cdp,sessionId,`(()=>{const b=[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')),r=b.getBoundingClientRect();return {x:r.right-4,y:r.bottom-8}})()`)
-      await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
-      await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
-      assert(await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')).getAttribute('aria-pressed')==='true' && document.querySelector('#output-panel').hidden`),'Floating toggle intercepted the edit-mode button: '+mode)
-    }
+  for (const mode of ['傾き・反転','クロップ']) {
+    const point = await evaluate(cdp,sessionId,`(()=>{const b=[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')),r=b.getBoundingClientRect();return {x:r.right-4,y:r.bottom-8}})()`)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
+    assert(await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')).getAttribute('aria-pressed')==='true' && document.querySelector('#output-panel').hidden===${!panelOpen}`),'Floating toggle intercepted the edit-mode button: '+mode)
   }
   return layout
 }

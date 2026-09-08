@@ -1075,6 +1075,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .editor-shell .download-button { width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
 .editor-shell .download-button span { font-size: 0.8rem; }
 .editor-shell .workspace {
+  position: relative;
   display: grid;
   flex: 1;
   grid-template-columns: minmax(0, 1fr);
@@ -1120,7 +1121,10 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   font-weight: 400;
 }
 .output-menu {
-  position: fixed;
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 5rem - env(safe-area-inset-bottom));
   right: max(1rem, env(safe-area-inset-right));
   bottom: max(1rem, env(safe-area-inset-bottom));
   z-index: 20;
@@ -1130,7 +1134,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   box-shadow: 0 8px 32px #0009;
 }
 .output-menu.is-open { width: min(20rem, calc(100vw - 2rem - env(safe-area-inset-right))); }
-.output-menu-header { display: flex; align-items: center; justify-content: flex-end; }
+.output-menu-header { flex: none; display: flex; align-items: center; justify-content: flex-end; }
 .output-menu.is-open .output-menu-header { padding: 0.5rem 0.5rem 0.5rem 1rem; }
 .output-toggle {
   display: grid;
@@ -1143,7 +1147,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .output-toggle svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .output-menu-title { margin: 0 auto 0 0; font-size: 1rem; }
 .editor-shell .settings-column {
-  max-height: calc(100dvh - 9rem - env(safe-area-inset-bottom));
+  flex: 1;
   display: block;
   min-height: 0;
   padding: 0.5rem 1rem 1rem;
@@ -1157,7 +1161,6 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
-.editor-shell .editor-bottom { padding-right: calc(4rem + max(1rem, env(safe-area-inset-right))); }
 .mode-controls { display: flex; align-items: center; justify-content: center; gap: 1rem; }
 .crop-controls { flex-wrap: wrap; }
 .crop-controls .field-help { display: none; }
