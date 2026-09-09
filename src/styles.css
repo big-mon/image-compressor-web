@@ -983,22 +983,8 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   overflow: hidden;
   background: #101010;
 }
-.editor-shell .tool-toolbar {
-  position: relative;
-  z-index: 30;
-  pointer-events: none;
-  flex: none;
-  gap: 0.65rem;
-  min-height: 3.75rem;
-  margin: 0;
-  padding: 0.5rem 1rem;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-.editor-shell .tool-toolbar button, .editor-shell .change-image-button { pointer-events: auto; background-color: var(--panel); }
-.editor-shell .tool-toolbar .download-button { background-color: var(--mint); }
-.toolbar-spacer { flex: 1; }
+.image-actions { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: max(0.5rem, env(safe-area-inset-left)); display: flex; gap: 0.5rem; }
+.image-actions button, .image-actions .change-image-button { background-color: var(--panel); }
 .editor-shell .download-button { width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
 .editor-shell .download-button span { font-size: 0.8rem; }
 .editor-shell .workspace {
@@ -1059,7 +1045,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   position: absolute;
   display: flex;
   flex-direction: column;
-  max-height: calc(100% - 5rem - env(safe-area-inset-bottom));
+  max-height: calc(100% - 9rem - env(safe-area-inset-bottom));
   right: max(1rem, env(safe-area-inset-right));
   bottom: max(1rem, env(safe-area-inset-bottom));
   z-index: 20;
@@ -1092,7 +1078,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .editor-bottom {
   position: relative;
   z-index: 30;
-  align-self: flex-start;
+  align-self: center;
   width: min(38rem, calc(100% - 4rem));
   margin: 0.5rem;
   border: 1px solid var(--line);
@@ -1119,8 +1105,8 @@ input[type="range"] { min-height: 2.75rem; }
 input[type="number"], select { background-color: #101010; }
 .secondary-button:hover, .secondary-button.is-selected { background: #302a19; border-color: var(--mint); }
 @media (max-width: 767px) {
-  .editor-shell .tool-toolbar { gap: 0.3rem; padding: 0.35rem 0.5rem; }
-  .editor-shell .tool-toolbar button, .editor-shell .change-image-button { padding: 0.45rem 0.5rem; font-size: 0.8rem; }
+  .image-actions { gap: 0.3rem; }
+  .image-actions button, .image-actions .change-image-button { padding: 0.45rem 0.5rem; font-size: 0.8rem; }
   .editor-shell .download-button { min-width: 3rem; }
   .editor-shell .download-button span { display: none; }
   .editor-shell .crop-stage-meta { padding-inline: 0.5rem; gap: 0.25rem; }
@@ -1135,7 +1121,7 @@ input[type="number"], select { background-color: #101010; }
   .footer-inner { flex-direction: column; align-items: start; }
 }
 @media (max-height: 500px) {
-  .editor-shell .tool-toolbar { min-height: 2.75rem; padding-block: 0; }
+  .output-menu { max-height: calc(100% - 7rem - env(safe-area-inset-bottom)); }
   .editor-shell { --view-switch-top: 3rem; --view-switch-padding: 0px; }
   .editor-bottom { padding-top: 0; }
   .edit-modes { margin: 0; }
@@ -1194,3 +1180,6 @@ body:has(.shell:not(.editor-shell)) > .static-content { flex: none; max-height: 
 .editor-shell .crop-handle { position: fixed; right: auto; bottom: auto; }
 .editor-shell .crop-handle::after { left: auto; top: auto; right: 0; bottom: 0; }
 @media (max-width: 767px) { .editor-shell .crop-stage-meta { top: auto; bottom: 11rem; left: 0.5rem; } }
+
+.compression-result { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+.compression-result .reduction-line { margin: 0; padding: 0; border: 0; }

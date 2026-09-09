@@ -743,7 +743,7 @@ function App() {
     const handle = stage?.querySelector<HTMLButtonElement>('.crop-handle')
     const shell = stage?.closest('.editor-shell')
     if (!stage || !crop || !handle || !shell) return
-    const controls = [...shell.querySelectorAll<HTMLElement>('.tool-toolbar,.view-switch,.output-menu,.editor-bottom,.error-message')]
+    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.view-switch,.output-menu,.editor-bottom,.error-message')]
     const placeHandle = () => {
       const frame = stage.getBoundingClientRect()
       const bounds = crop.getBoundingClientRect()
@@ -782,8 +782,7 @@ function App() {
             aria-label="画像ファイルを選択"
             onChange={handleInputChange}
           />
-        <header className="tool-toolbar">
-          {!asset ? <div className="toolbar-copy"><h1>画像を圧縮・編集</h1><p className="tool-reassurance">画像は外部に送信されません</p></div> : <>
+        {!asset ? <header className="tool-toolbar"><div className="toolbar-copy"><h1>画像を圧縮・編集</h1><p className="tool-reassurance">画像は外部に送信されません</p></div></header> : <div className="image-actions" role="group" aria-label="画像の操作">
             <h1 className="visually-hidden">画像を圧縮・編集</h1>
               <label
                 className={`change-image-button${dragging ? ' is-dragging' : ''}`}
@@ -803,10 +802,7 @@ function App() {
                 画像を変更
               </label>
             <button type="button" className="text-button" onClick={resetEdits}>リセット</button>
-            <div className="toolbar-spacer" />
-            <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
-          </>}
-        </header>
+        </div>}
         {asset && editState && geometry ? <>
           <section className="workspace" aria-label="画像エディター" data-quick-width={quickPreviewMetrics?.outputWidth} data-quick-height={quickPreviewMetrics?.outputHeight} data-quick-bytes={quickPreviewMetrics?.outputBytes}>
             <div className="editor-column">
@@ -984,7 +980,10 @@ function App() {
                   <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
                   <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
                 </div>
+                <div className="compression-result">
                 <div className="reduction-line" role="status" aria-live="polite"><strong>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
+                  <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
+                </div>
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
             </aside>
