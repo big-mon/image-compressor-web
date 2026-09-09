@@ -1276,3 +1276,6 @@ body:has(.shell:not(.editor-shell)) #root { flex: 1; min-height: 0; }
 .shell:not(.editor-shell) .privacy-details { max-height: 25dvh; overflow: auto; }
 body:has(.shell:not(.editor-shell)) .site-footer { flex: none; padding-block: 0.75rem; }
 body:has(.shell:not(.editor-shell)) > .static-content { flex: none; max-height: 30dvh; overflow: auto; margin-bottom: 0.75rem; padding-block: 0.25rem; }
+
+#quality-settings .range-control { margin-top: 0.75rem; gap: 0.15rem; }
+#quality-settings .comparison-quality-note { margin-top: 0.75rem; }

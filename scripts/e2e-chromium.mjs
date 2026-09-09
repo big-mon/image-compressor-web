@@ -1840,8 +1840,8 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
     assert(inside(layout.panel) && layout.panel.height > 0 && layout.panelOnTop, 'Output panel must be visible above the image.')
     assert(layout.panel.x < layout.editor.right && layout.panel.y < layout.editor.bottom, 'Output panel must overlap the editor.')
     assert(layout.toggle.bottom <= layout.panel.y && layout.menu.right-layout.toggle.right <= 10, 'Toggle must be at the top right of the menu.')
-    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),d=document.querySelector('#resize-settings'),wasOpen=d.open;d.open=true;p.querySelector('#resize-height').scrollIntoView({block:'nearest'});const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top&&r.bottom<=b.bottom&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));p.scrollTop=0;d.open=wasOpen;return visible})()`)
-    assert(scroll,'Output settings at the bottom are not reachable.')
+    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),d=document.querySelector('#resize-settings'),wasOpen=d.open;d.open=true;p.querySelector('#resize-height').scrollIntoView({block:'nearest'});const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top-1&&r.bottom<=b.bottom+1&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));const result={visible,input:r.toJSON(),panel:b.toJSON(),toggle:tr.toJSON(),scroll:p.scrollTop};p.scrollTop=0;d.open=wasOpen;return result})()`)
+    assert(scroll.visible,'Output settings at the bottom are not reachable: '+JSON.stringify({viewport,...scroll}))
   }
   for (const mode of ['傾き・反転','クロップ']) {
     const point = await evaluate(cdp,sessionId,`(()=>{const b=[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')),r=b.getBoundingClientRect();return {x:r.right-4,y:r.bottom-8}})()`)
@@ -1923,21 +1923,23 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'true' && !document.querySelector('#output-panel').hidden`), 'Output panel must start expanded.')
+  await waitForDom(cdp, sessionId, `document.querySelector('.output-toggle')?.getAttribute('aria-expanded') === 'true' && document.querySelector('#output-panel')?.hidden === false`, 'initial expanded output panel after image decode')
   await waitForFullOutput(cdp, sessionId)
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-menu-title').textContent==='圧縮' && [...document.querySelectorAll('.compression-section')].length===3 && [...document.querySelectorAll('.compression-section')].every(d=>!d.open) && !document.querySelector('.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must initially show collapsed settings and only the reduction result.')
-  for (const id of ['quality-settings','format-settings','resize-settings']) {
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-menu-title').textContent==='圧縮' && [...document.querySelectorAll('.compression-section')].length===2 && document.querySelector('#quality-settings').open && !document.querySelector('#resize-settings').open && !document.querySelector('.effective-size,.metrics-card,.capacity-bars,#quality-help,#format-settings')`),'Compression menu must initially expand quality and collapse output size.')
+  assert(await evaluate(cdp,sessionId,`(()=>{const q=document.querySelector('#quality-settings'),f=q.querySelector('#output-format'),l=q.querySelector('label[for="quality"]'),r=q.querySelector('#quality');return f&&l&&r&&f.getBoundingClientRect().bottom<=l.getBoundingClientRect().top&&parseFloat(getComputedStyle(r.parentElement).rowGap)<=3})()`),'Format must appear above quality with a compact label-to-slider gap.')
+  for (const id of ['quality-settings','resize-settings']) {
+    const wasOpen = await evaluate(cdp,sessionId,`document.querySelector('#${id}').open`)
     const point = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('#${id} summary').getBoundingClientRect();return {x:r.x+30,y:r.y+r.height/2}})()`)
     await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
-    assert(await evaluate(cdp,sessionId,`document.querySelector('#${id}').open`),'Compression section did not expand.')
+    assert(await evaluate(cdp,sessionId,`document.querySelector('#${id}').open!==${wasOpen}`),'Compression section did not toggle.')
     await evaluate(cdp,sessionId,`document.querySelector('#${id} summary').focus()`)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13},sessionId)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId)
-    assert(await evaluate(cdp,sessionId,`!document.querySelector('#${id}').open`),'Compression section did not collapse with keyboard.')
+    assert(await evaluate(cdp,sessionId,`document.querySelector('#${id}').open===${wasOpen}`),'Compression section did not toggle with keyboard.')
   }
-  await captureScreenshot(cdp,sessionId,'compression-collapsed.png')
+  await captureScreenshot(cdp,sessionId,'compression-initial.png')
   const requestCount = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.requests.length')
   await setControlValue(cdp, sessionId, '#quality', '0.81')
   await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'quick preview before cancelling the scheduled full encode')
