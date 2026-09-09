@@ -1996,6 +1996,22 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').getAttribute('aria-pressed')==='true' && document.querySelectorAll('.aspect-preset[aria-pressed="true"]').length===1 && Math.abs(document.querySelector('.crop-rectangle').getBoundingClientRect().width-document.querySelector('.crop-rectangle').getBoundingClientRect().height)<1`, 'keyboard selection applies the square preset')
   await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
   await resizeCropByPointer(cdp,sessionId,9,9)
+  // Tab reaches the resize handle; arrow resizing must not bubble into crop movement.
+  await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.activeElement===document.querySelector('.crop-handle')`),'Tab must reach the crop resize handle.')
+  const keyboardResizeStart = await evaluate(cdp,sessionId,`(()=>{const s=document.querySelector('.crop-rectangle').style;return {left:s.left,top:s.top,width:parseFloat(s.width),height:parseFloat(s.height)}})()`)
+  for (const [key, keyCode, modifiers, axis, direction] of [
+    ['ArrowLeft',37,0,'width',-1], ['ArrowUp',38,8,'height',-1],
+    ['ArrowRight',39,0,'width',1], ['ArrowDown',40,8,'height',1],
+  ]) {
+    const before = await evaluate(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.${axis})`)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:keyCode,modifiers},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:keyCode,modifiers},sessionId)
+    await waitForDom(cdp,sessionId,`(parseFloat(document.querySelector('.crop-rectangle').style.${axis})-${before})*${direction}>0`,'keyboard crop resize '+key)
+  }
+  assert(await evaluate(cdp,sessionId,`(()=>{const s=document.querySelector('.crop-rectangle').style,b=${JSON.stringify(keyboardResizeStart)};return s.left===b.left&&s.top===b.top&&Math.abs(parseFloat(s.width)-b.width)<0.000001&&Math.abs(parseFloat(s.height)-b.height)<0.000001&&document.activeElement===document.querySelector('.crop-handle')})()`),'Keyboard resizing must preserve the top-left anchor and focus, and opposite arrows must restore the dimensions.')
   await setControlValue(cdp,sessionId,'#resize-width','200')
   await waitForFullOutput(cdp,sessionId)
   pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true}))

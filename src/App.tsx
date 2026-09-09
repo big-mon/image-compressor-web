@@ -603,7 +603,7 @@ function App() {
     }
   }
 
-  const moveCropWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+  const editCropWithKeyboard = (event: React.KeyboardEvent<HTMLElement>, mode: CropInteractionMode) => {
     if (!geometry) {
       return
     }
@@ -621,9 +621,10 @@ function App() {
       return
     }
     event.preventDefault()
+    event.stopPropagation()
     updateEditState((current) => ({
       ...current,
-      crop: translateCrop(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
+      crop: (mode === 'resize' ? resizeCropFromBottomRight : translateCrop)(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
       zoom: 1,
       panX: 0,
       panY: 0,
@@ -807,14 +808,15 @@ function App() {
                       role="group"
                       tabIndex={0}
                       aria-label="切り抜き範囲。矢印キーで移動、Shiftで大きく移動"
-                      onKeyDown={moveCropWithKeyboard}
+                      onKeyDown={(event) => editCropWithKeyboard(event, 'move')}
                       onPointerDown={(event) => beginCropInteraction(event, 'move')}
                     >
                       <span className="crop-guide crop-grid" aria-hidden="true" />
                       <button
                         className="crop-handle"
                         type="button"
-                        aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ"
+                        aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ。矢印キーでサイズ変更、Shiftで大きく変更"
+                        onKeyDown={(event) => editCropWithKeyboard(event, 'resize')}
                         onPointerDown={(event) => beginCropInteraction(event, 'resize')}
                       />
                     </div>
