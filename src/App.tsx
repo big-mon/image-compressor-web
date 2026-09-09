@@ -966,28 +966,22 @@ function App() {
               </button>
               </div>
             <aside id="output-panel" className="settings-column" aria-label="圧縮" hidden={!outputOpen}>
-                <details className="compression-section" id="quality-settings" open>
-                  <summary>画質</summary>
-                  <label className="visually-hidden" htmlFor="output-format">形式</label>
-                  <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
-                    {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                  {outputMime === 'image/png' ? (
-                    <p className="comparison-quality-note">PNGでは画質の設定はありません。</p>
-                  ) : (
-                    <div className="range-control">
-                      <div className="range-label"><label htmlFor="quality">画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
-                      <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
-                    </div>
-                  )}
-                </details>
-                <details className="compression-section" id="resize-settings">
-                  <summary>出力サイズ</summary>
-                  <div className="resize-fields">
-                    <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
-                    <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
+                <label className="visually-hidden" htmlFor="output-format">形式</label>
+                <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
+                  {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                {outputMime === 'image/png' ? (
+                  <p className="comparison-quality-note">PNGでは画質の設定はありません。</p>
+                ) : (
+                  <div className="range-control">
+                    <div className="range-label"><label htmlFor="quality">画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
+                    <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
                   </div>
-                </details>
+                )}
+                <div className="resize-fields">
+                  <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
+                  <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
+                </div>
                 <div className="reduction-line" role="status" aria-live="polite"><strong>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 

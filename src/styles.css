@@ -1263,9 +1263,6 @@ input[type="number"], select { background-color: #101010; }
   .crop-controls .guide-control, .crop-controls .advanced-controls { flex: none; }
 }
 
-.compression-section { border-top: 1px solid var(--line); padding-bottom: 0.5rem; }
-.compression-section summary { min-height: 2.75rem; padding: 0.75rem 0; cursor: pointer; font-weight: 700; }
-.compression-section:not([open]) { padding-bottom: 0; }
 
 /* Share the initial viewport between selection, footer, and optional help. */
 body:has(.shell:not(.editor-shell)) { display: flex; flex-direction: column; height: 100dvh; min-height: 0; }
@@ -1277,5 +1274,7 @@ body:has(.shell:not(.editor-shell)) #root { flex: 1; min-height: 0; }
 body:has(.shell:not(.editor-shell)) .site-footer { flex: none; padding-block: 0.75rem; }
 body:has(.shell:not(.editor-shell)) > .static-content { flex: none; max-height: 30dvh; overflow: auto; margin-bottom: 0.75rem; padding-block: 0.25rem; }
 
-#quality-settings .range-control { margin-top: 0.75rem; gap: 0.15rem; }
-#quality-settings .comparison-quality-note { margin-top: 0.75rem; }
+.settings-column > .range-control { margin-top: 0.75rem; gap: 0.15rem; }
+.settings-column > .comparison-quality-note { margin-top: 0.75rem; }
+
+.settings-column > .resize-fields { margin-top: 0.75rem; }

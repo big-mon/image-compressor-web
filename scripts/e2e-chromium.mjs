@@ -1230,8 +1230,6 @@ async function setControlValue(cdp, sessionId, selector, value) {
   await evaluate(cdp, sessionId, `(() => {
     const element = document.querySelector(${quotedSelector})
     if (!element) throw new Error('Control not found: ' + ${quotedSelector})
-    const section = element.closest('.compression-section')
-    if (section && !section.open) section.querySelector('summary').click()
     const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
     const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
     if (!setter) throw new Error('Control value setter is unavailable: ' + ${quotedSelector})
@@ -1840,7 +1838,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
     assert(inside(layout.panel) && layout.panel.height > 0 && layout.panelOnTop, 'Output panel must be visible above the image.')
     assert(layout.panel.x < layout.editor.right && layout.panel.y < layout.editor.bottom, 'Output panel must overlap the editor.')
     assert(layout.toggle.bottom <= layout.panel.y && layout.menu.right-layout.toggle.right <= 10, 'Toggle must be at the top right of the menu.')
-    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),d=document.querySelector('#resize-settings'),wasOpen=d.open;d.open=true;p.querySelector('#resize-height').scrollIntoView({block:'nearest'});const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top-1&&r.bottom<=b.bottom+1&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));const result={visible,input:r.toJSON(),panel:b.toJSON(),toggle:tr.toJSON(),scroll:p.scrollTop};p.scrollTop=0;d.open=wasOpen;return result})()`)
+    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel');p.querySelector('#resize-height').scrollIntoView({block:'nearest'});const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top-1&&r.bottom<=b.bottom+1&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));const result={visible,input:r.toJSON(),panel:b.toJSON(),toggle:tr.toJSON(),scroll:p.scrollTop};p.scrollTop=0;return result})()`)
     assert(scroll.visible,'Output settings at the bottom are not reachable: '+JSON.stringify({viewport,...scroll}))
   }
   for (const mode of ['傾き・反転','クロップ']) {
@@ -1926,19 +1924,8 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp, sessionId, `document.querySelector('.output-toggle')?.getAttribute('aria-expanded') === 'true' && document.querySelector('#output-panel')?.hidden === false`, 'initial expanded output panel after image decode')
   await waitForFullOutput(cdp, sessionId)
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-menu-title').textContent==='圧縮' && [...document.querySelectorAll('.compression-section')].length===2 && document.querySelector('#quality-settings').open && !document.querySelector('#resize-settings').open && !document.querySelector('.effective-size,.metrics-card,.capacity-bars,#quality-help,#format-settings')`),'Compression menu must initially expand quality and collapse output size.')
-  assert(await evaluate(cdp,sessionId,`(()=>{const q=document.querySelector('#quality-settings'),f=q.querySelector('#output-format'),l=q.querySelector('label[for="quality"]'),r=q.querySelector('#quality');return f&&l&&r&&f.getBoundingClientRect().bottom<=l.getBoundingClientRect().top&&parseFloat(getComputedStyle(r.parentElement).rowGap)<=3})()`),'Format must appear above quality with a compact label-to-slider gap.')
-  for (const id of ['quality-settings','resize-settings']) {
-    const wasOpen = await evaluate(cdp,sessionId,`document.querySelector('#${id}').open`)
-    const point = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('#${id} summary').getBoundingClientRect();return {x:r.x+30,y:r.y+r.height/2}})()`)
-    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
-    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
-    assert(await evaluate(cdp,sessionId,`document.querySelector('#${id}').open!==${wasOpen}`),'Compression section did not toggle.')
-    await evaluate(cdp,sessionId,`document.querySelector('#${id} summary').focus()`)
-    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13},sessionId)
-    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId)
-    assert(await evaluate(cdp,sessionId,`document.querySelector('#${id}').open===${wasOpen}`),'Compression section did not toggle with keyboard.')
-  }
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-menu-title').textContent==='圧縮' && !document.querySelector('#output-panel details,#output-panel summary,.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must show controls without accordion sections.')
+  assert(await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),f=p.querySelector('#output-format'),l=p.querySelector('label[for="quality"]'),r=p.querySelector('#quality'),w=p.querySelector('#resize-width'),h=p.querySelector('#resize-height');return f&&l&&r&&w&&h&&[f,r,w,h].every(e=>e.checkVisibility())&&f.getBoundingClientRect().bottom<=l.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=w.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=h.getBoundingClientRect().top&&parseFloat(getComputedStyle(r.parentElement).rowGap)<=3})()`),'Format, quality, width and height must initially be visible in order with a compact label-to-slider gap.')
   await captureScreenshot(cdp,sessionId,'compression-initial.png')
   const requestCount = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.requests.length')
   await setControlValue(cdp, sessionId, '#quality', '0.81')
@@ -1962,7 +1949,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await setOutputPanel(cdp,sessionId,true)
-  await evaluate(cdp,sessionId, `document.querySelector('#quality-settings summary').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+  await evaluate(cdp,sessionId, `document.querySelector('#output-format').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
   await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && document.activeElement === document.querySelector('.output-toggle')`, 'Escape closes panel and restores focus')
   await setOutputPanel(cdp,sessionId,true)
 
