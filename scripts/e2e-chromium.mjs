@@ -2012,6 +2012,22 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await waitForDom(cdp,sessionId,`(parseFloat(document.querySelector('.crop-rectangle').style.${axis})-${before})*${direction}>0`,'keyboard crop resize '+key)
   }
   assert(await evaluate(cdp,sessionId,`(()=>{const s=document.querySelector('.crop-rectangle').style,b=${JSON.stringify(keyboardResizeStart)};return s.left===b.left&&s.top===b.top&&Math.abs(parseFloat(s.width)-b.width)<0.000001&&Math.abs(parseFloat(s.height)-b.height)<0.000001&&document.activeElement===document.querySelector('.crop-handle')})()`),'Keyboard resizing must preserve the top-left anchor and focus, and opposite arrows must restore the dimensions.')
+  // This fixture's rotated/straightened display frame is 1132 × 1132 pixels.
+  for (const preset of ['1:1','16:9']) {
+    await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="${preset}"]').click()`)
+    await resizeCropByPointer(cdp,sessionId,9,9)
+    await evaluate(cdp,sessionId,`document.querySelector('.crop-handle').focus()`)
+    for (const [key,keyCode,modifiers,axis,step] of [
+      ['ArrowRight',39,0,'width',1], ['ArrowUp',38,8,'height',-10],
+    ]) {
+      const before = await evaluate(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.${axis})`)
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:keyCode,modifiers},sessionId)
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:keyCode,modifiers},sessionId)
+      await waitForDom(cdp,sessionId,`Math.abs((parseFloat(document.querySelector('.crop-rectangle').style.${axis})-${before})*1132/100-(${step}))<0.001`,'fixed-ratio keyboard increment '+preset+' '+key)
+    }
+  }
+  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
+  await resizeCropByPointer(cdp,sessionId,9,9)
   await setControlValue(cdp,sessionId,'#resize-width','200')
   await waitForFullOutput(cdp,sessionId)
   pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true}))

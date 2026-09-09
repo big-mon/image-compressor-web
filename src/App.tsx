@@ -622,13 +622,21 @@ function App() {
     }
     event.preventDefault()
     event.stopPropagation()
-    updateEditState((current) => ({
-      ...current,
-      crop: (mode === 'resize' ? resizeCropFromBottomRight : translateCrop)(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
-      zoom: 1,
-      panX: 0,
-      panY: 0,
-    }))
+    updateEditState((current) => {
+      // Follow the ratio in both axes so projection preserves the pressed axis's step.
+      const resizeDelta = current.aspectRatio === 'free' ? delta : delta.x !== 0
+        ? { x: delta.x, y: delta.x * geometry.crop.height / geometry.crop.width }
+        : { x: delta.y * geometry.crop.width / geometry.crop.height, y: delta.y }
+      return {
+        ...current,
+        crop: mode === 'resize'
+          ? resizeCropFromBottomRight(geometry.crop, resizeDelta, geometry.displaySize, current.aspectRatio)
+          : translateCrop(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
+        zoom: 1,
+        panX: 0,
+        panY: 0,
+      }
+    })
   }
 
   const moveComparisonBoundary = (event: ReactPointerEvent<HTMLDivElement>) => {
