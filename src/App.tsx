@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 import { isSameResultIntent, type ResultIntent } from './app-async'
@@ -29,6 +29,7 @@ import {
 } from './image/raster'
 import {
   createCropSurfaceStyle,
+  placeCropHandle,
   createStageTransform,
 } from './image/stage'
 
@@ -735,6 +736,31 @@ function App() {
         maxWidth: `min(100%, calc(100cqh * ${geometry.crop.width / geometry.crop.height}))`,
       }
     : undefined
+  useLayoutEffect(() => {
+    if (!geometry || editorView !== 'edit') return
+    const stage = cropSurfaceRef.current?.closest('.stage-area')
+    const crop = stage?.querySelector<HTMLElement>('.crop-rectangle')
+    const handle = stage?.querySelector<HTMLButtonElement>('.crop-handle')
+    const shell = stage?.closest('.editor-shell')
+    if (!stage || !crop || !handle || !shell) return
+    const controls = [...shell.querySelectorAll<HTMLElement>('.tool-toolbar,.view-switch,.output-menu,.editor-bottom,.error-message')]
+    const placeHandle = () => {
+      const frame = stage.getBoundingClientRect()
+      const bounds = crop.getBoundingClientRect()
+      const position = placeCropHandle(
+        { x: bounds.right, y: bounds.bottom },
+        { width: frame.width, height: frame.height },
+        handle.getBoundingClientRect().width,
+        controls.map(control => control.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0),
+      )
+      handle.style.left = `${position.left}px`
+      handle.style.top = `${position.top}px`
+    }
+    placeHandle()
+    const observer = new ResizeObserver(placeHandle)
+    for (const element of [shell, stage, crop, ...controls]) observer.observe(element)
+    return () => observer.disconnect()
+  }, [geometry, editorView, editorMode, outputOpen, errorMessage])
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
         left: `${-currentCrop.x / currentCrop.width * 100}%`,

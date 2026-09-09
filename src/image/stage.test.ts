@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createCropSurfaceStyle,
+  placeCropHandle,
   createStageTransform,
 } from './stage'
 
@@ -42,5 +43,28 @@ describe('editor stage presentation helpers', () => {
     expect(() => createCropSurfaceStyle(displaySize)).toThrow(
       'Crop surface dimensions must be positive numbers.',
     )
+  })
+})
+
+describe('crop handle placement', () => {
+  it('keeps the nearest corner position when no control covers it', () => {
+    expect(placeCropHandle({ x: 200, y: 300 }, { width: 800, height: 600 }, 44, [])).toEqual({ left: 156, top: 256 })
+  })
+
+  it('avoids the switch, compression and bottom panels with the whole tap target', () => {
+    const controls = [
+      { x: 300, y: 60, width: 180, height: 52 },
+      { x: 460, y: 200, width: 320, height: 230 },
+      { x: 8, y: 450, width: 600, height: 142 },
+    ]
+    for (const corner of [{ x: 400, y: 80 }, { x: 600, y: 350 }, { x: 420, y: 580 }]) {
+      const p = placeCropHandle(corner, { width: 800, height: 600 }, 44, controls)
+      expect(p.left).toBeGreaterThanOrEqual(0)
+      expect(p.top).toBeGreaterThanOrEqual(0)
+      expect(p.left + 44).toBeLessThanOrEqual(800)
+      expect(p.top + 44).toBeLessThanOrEqual(600)
+      for (const r of controls) expect(p.left + 44 <= r.x || p.left >= r.x + r.width || p.top + 44 <= r.y || p.top >= r.y + r.height).toBe(true)
+    }
+    expect(placeCropHandle({ x: 420, y: 580 }, { width: 800, height: 600 }, 44, [])).toEqual({ left: 376, top: 536 })
   })
 })

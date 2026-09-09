@@ -42,3 +42,32 @@ export function createCropSurfaceStyle(displaySize: Size): CropSurfaceStyle {
     marginInline: 'auto',
   }
 }
+
+/** Place the entire resize target at the nearest unoccluded viewport position. */
+export function placeCropHandle(
+  corner: { x: number; y: number },
+  viewport: Size,
+  size: number,
+  controls: readonly { x: number; y: number; width: number; height: number }[],
+): { left: number; top: number } {
+  const maxX = Math.max(0, viewport.width - size)
+  const maxY = Math.max(0, viewport.height - size)
+  const clampX = (x: number) => Math.max(0, Math.min(maxX, x))
+  const clampY = (y: number) => Math.max(0, Math.min(maxY, y))
+  const preferred = { left: clampX(corner.x - size), top: clampY(corner.y - size) }
+  const obstacles = controls.map(r => ({ x: r.x - 2, y: r.y - 2, right: r.x + r.width + 2, bottom: r.y + r.height + 2 }))
+  const xs = [preferred.left, 0, maxX, ...obstacles.flatMap(r => [clampX(r.x - size), clampX(r.right)])]
+  const ys = [preferred.top, 0, maxY, ...obstacles.flatMap(r => [clampY(r.y - size), clampY(r.bottom)])]
+  let best: typeof preferred | undefined
+  let distance = Infinity
+  for (const left of xs) for (const top of ys) {
+    if (obstacles.some(r => left < r.right && left + size > r.x && top < r.bottom && top + size > r.y)) continue
+    const nextDistance = (left - preferred.left) ** 2 + (top - preferred.top) ** 2
+    if (nextDistance < distance) {
+      best = { left, top }
+      distance = nextDistance
+    }
+  }
+  // ponytail: if controls cover every 44px slot, keyboard resizing remains the fallback.
+  return best ?? preferred
+}
