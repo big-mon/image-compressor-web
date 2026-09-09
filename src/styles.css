@@ -982,16 +982,20 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   background: #101010;
 }
 .editor-shell .tool-toolbar {
+  position: relative;
+  z-index: 30;
+  pointer-events: none;
   flex: none;
   gap: 0.65rem;
   min-height: 3.75rem;
   margin: 0;
   padding: 0.5rem 1rem;
   border: 0;
-  border-bottom: 1px solid var(--line);
   border-radius: 0;
-  background: #191919;
+  background: transparent;
 }
+.editor-shell .tool-toolbar button, .editor-shell .change-image-button { pointer-events: auto; background-color: var(--panel); }
+.editor-shell .tool-toolbar .download-button { background-color: var(--mint); }
 .toolbar-spacer { flex: 1; }
 .editor-shell .download-button { width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
 .editor-shell .download-button span { font-size: 0.8rem; }
@@ -1004,8 +1008,8 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   gap: 0;
   overflow: hidden;
 }
-.editor-shell .editor-column { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
-.view-switch { display: flex; justify-content: center; gap: 0.25rem; flex: none; padding: 0.4rem; }
+.editor-shell .editor-column { position: fixed; inset: 0; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+.view-switch { position: absolute; z-index: 10; top: calc(4rem + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; justify-content: center; gap: 0.25rem; padding: 0.25rem; border-radius: 0.75rem; background: var(--panel); }
 .view-switch button { min-width: 5rem; }
 .view-switch button, .edit-modes button {
   min-height: 2.75rem;
@@ -1017,10 +1021,12 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 }
 .view-switch button[aria-pressed="true"], .edit-modes button[aria-pressed="true"] { color: var(--mint); background: #29261d; }
 .editor-shell .stage-area {
+  position: absolute;
+  inset: 0;
   flex: 1;
   height: auto;
   min-height: 0;
-  padding: 0.75rem 3rem 3rem 0.75rem;
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: #101010;
@@ -1028,12 +1034,18 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 }
 .editor-shell .crop-surface { border: 0; border-radius: 0; box-shadow: none; }
 .editor-shell .crop-stage-meta {
+  position: absolute;
+  z-index: 10;
+  top: calc(4.5rem + env(safe-area-inset-top));
+  left: 1rem;
+  pointer-events: none;
   min-height: 1.75rem;
   flex: none;
   padding: 0.15rem 1rem;
   color: var(--muted);
 }
-.editor-shell .status-chip, .editor-shell .stage-preview-label {
+.editor-shell .stage-preview-label { display: none; }
+.editor-shell .status-chip {
   min-height: 0;
   padding: 0;
   border: 0;
@@ -1077,9 +1089,14 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 }
 .editor-bottom {
   position: relative;
+  z-index: 30;
+  align-self: flex-start;
+  width: min(38rem, calc(100% - 4rem));
+  margin: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
   flex: none;
   padding: 0.5rem 1rem max(0.4rem, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
   background: var(--panel);
 }
 .mode-controls { display: flex; align-items: center; justify-content: center; gap: 1rem; }
@@ -1091,11 +1108,11 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .edit-modes { display: flex; justify-content: center; gap: 1.5rem; margin-top: 0.5rem; }
 .edit-modes button { display: grid; justify-items: center; gap: 0.25rem; min-width: 6.5rem; font-size: 0.8rem; }
 .edit-modes svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.editor-shell .comparison-section { flex: 1; min-height: 0; margin: 0; }
+.editor-shell .comparison-section { position: absolute; inset: 0; min-height: 0; margin: 0; }
 .comparison-card { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.comparison-stage { display: grid; flex: 1; min-height: 0; padding: 0.5rem 1rem; container-type: size; place-items: center; }
+.comparison-stage { display: grid; flex: 1; min-height: 0; padding: 0; container-type: size; place-items: center; }
 .editor-shell .comparison-viewport { max-height: 100%; margin: 0; border: 0; border-radius: 0; }
-.editor-shell .error-message { flex: none; margin: 0; padding: 0.4rem 1rem; max-height: 20dvh; overflow: auto; border-radius: 0; }
+.editor-shell .error-message { position: relative; z-index: 30; flex: none; margin: 0; padding: 0.4rem 1rem; max-height: 20dvh; overflow: auto; border-radius: 0; }
 input[type="range"] { min-height: 2.75rem; }
 input[type="number"], select { background-color: #101010; }
 .secondary-button:hover, .secondary-button.is-selected { background: #302a19; border-color: var(--mint); }
@@ -1117,7 +1134,7 @@ input[type="number"], select { background-color: #101010; }
 }
 @media (max-height: 500px) {
   .editor-shell .tool-toolbar { min-height: 2.75rem; padding-block: 0; }
-  .view-switch { padding-block: 0; }
+  .view-switch { top: calc(3rem + env(safe-area-inset-top)); padding-block: 0; }
   .editor-bottom { padding-top: 0; }
   .edit-modes { margin: 0; }
   .edit-modes button { display: flex; align-items: center; }
@@ -1127,9 +1144,6 @@ input[type="number"], select { background-color: #101010; }
 }
 
 @media (max-height: 500px) {
-  .editor-shell .stage-area { padding: 0.5rem; }
-  .editor-shell .crop-handle { right: 0; bottom: 0; }
-  .editor-shell .crop-handle::after { left: auto; top: auto; right: 0; bottom: 0; }
   .crop-controls .field-label-row,
   .straighten-control .range-label label {
     position: absolute;
@@ -1139,7 +1153,6 @@ input[type="number"], select { background-color: #101010; }
     clip-path: inset(50%);
   }
   .crop-controls .aspect-ratio-control { gap: 0; }
-  .comparison-stage { padding-block: 0.25rem; }
   .straighten-control { display: flex; align-items: center; gap: 0.5rem; }
   .straighten-control input { min-width: 0; }
   .straighten-control .range-label { flex: none; gap: 0.25rem; }
@@ -1175,3 +1188,7 @@ body:has(.shell:not(.editor-shell)) > .static-content { flex: none; max-height: 
 .settings-column > .comparison-quality-note { margin-top: 0.75rem; }
 
 .settings-column > .resize-fields { margin-top: 0.75rem; }
+
+.editor-shell .crop-handle { position: fixed; right: auto; bottom: auto; }
+.editor-shell .crop-handle::after { left: auto; top: auto; right: 0; bottom: 0; }
+@media (max-width: 767px) { .editor-shell .crop-stage-meta { top: auto; bottom: 11rem; left: 0.5rem; } }

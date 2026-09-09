@@ -735,6 +735,12 @@ function App() {
         maxWidth: `min(100%, calc(100cqh * ${geometry.crop.width / geometry.crop.height}))`,
       }
     : undefined
+  const fittedWidth = geometry ? `min(100vw, calc(100dvh * ${geometry.displaySize.width / geometry.displaySize.height}))` : '0px'
+  const fittedHeight = geometry ? `min(100dvh, calc(100vw * ${geometry.displaySize.height / geometry.displaySize.width}))` : '0px'
+  const cropHandleStyle: CSSProperties | undefined = geometry ? {
+    left: `clamp(0px, calc((100vw - ${fittedWidth}) / 2 + ${fittedWidth} * ${(currentCrop.x + currentCrop.width) / geometry.displaySize.width} - 2.75rem), calc(100vw - 2.75rem))`,
+    top: `clamp(calc(4rem + env(safe-area-inset-top)), calc((100dvh - ${fittedHeight}) / 2 + ${fittedHeight} * ${(currentCrop.y + currentCrop.height) / geometry.displaySize.height} - 2.75rem), calc(100dvh - 2.75rem))`,
+  } : undefined
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
         left: `${-currentCrop.x / currentCrop.width * 100}%`,
@@ -822,6 +828,7 @@ function App() {
                       <span className="crop-guide crop-grid" aria-hidden="true" />
                       <button
                         className="crop-handle"
+                        style={cropHandleStyle}
                         type="button"
                         aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ。矢印キーでサイズ変更、Shiftで大きく変更"
                         onKeyDown={(event) => editCropWithKeyboard(event, 'resize')}
