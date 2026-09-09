@@ -732,7 +732,7 @@ async function readPr8State(cdp, sessionId) {
     const preview = document.querySelector('.processed-preview')
     return {
       busy: document.querySelector('.status-chip')?.classList.contains('is-busy') ?? false,
-      crop: [...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value),
+      crop: ['left','top','width','height'].map(key => document.querySelector('.crop-rectangle')?.style[key]),
       downloadDisabled: document.querySelector('.download-button')?.disabled ?? true,
       error: document.querySelector('.error-message')?.textContent?.trim() ?? '',
       outputMime: document.querySelector('#output-format')?.value ?? '',
@@ -860,16 +860,10 @@ async function captureToolLayout(cdp, sessionId) {
       }
     }
     const dropZone = document.querySelector('.drop-zone')
-    const advancedControls = document.querySelector('.advanced-controls')
     const privacyDetails = document.querySelector('.privacy-details')
     return {
-      advancedControls: advancedControls ? {
-        ...describe('.advanced-controls'),
-        open: advancedControls.open,
-      } : null,
       changeImage: describe('.change-image-button'),
       aspectRatio: describe('#aspect-ratio'),
-      compositionGuide: describe('#composition-guide'),
       cropSurface: describe('.crop-surface'),
       dropZone: dropZone ? {
         ...describe('.drop-zone'),
@@ -960,19 +954,6 @@ async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
   })()`)
   assert(focusReachedDropZone === true, `The empty ${mode} drop zone could not receive keyboard focus.`)
   return layout
-}
-
-async function openDetails(cdp, sessionId, selector) {
-  const quotedSelector = JSON.stringify(selector)
-  const opened = await evaluate(cdp, sessionId, `(() => {
-    const details = document.querySelector(${quotedSelector})
-    if (!(details instanceof HTMLDetailsElement)) throw new Error('Details element not found: ' + ${quotedSelector})
-    const summary = details.querySelector(':scope > summary')
-    if (!(summary instanceof HTMLElement)) throw new Error('Details summary not found: ' + ${quotedSelector})
-    if (!details.open) summary.click()
-    return details.open
-  })()`)
-  assert(opened === true, `Could not open details disclosure: ${selector}`)
 }
 
 async function assertPublicMetadataAndFooter(cdp, sessionId, basePath) {
@@ -1224,6 +1205,23 @@ async function clickButton(cdp, sessionId, text) {
   })()`)
 }
 
+// Target percentages of the displayed image frame through the actual resize handle.
+async function resizeCropByPointer(cdp, sessionId, width, height) {
+  const panelOpen = await evaluate(cdp,sessionId,`!document.querySelector('#output-panel').hidden`)
+  await setOutputPanel(cdp,sessionId,false)
+  const drag = await evaluate(cdp,sessionId,`(() => {
+    const surface=document.querySelector('.crop-surface').getBoundingClientRect()
+    const crop=document.querySelector('.crop-rectangle').style
+    const handle=document.querySelector('.crop-handle').getBoundingClientRect()
+    const x=handle.x+handle.width/2,y=handle.y+handle.height/2
+    return {x,y,toX:x+surface.width*(${width}-parseFloat(crop.width))/100,toY:y+surface.height*(${height}-parseFloat(crop.height))/100}
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:drag.x,y:drag.y,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:drag.toX,y:drag.toY,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:drag.toX,y:drag.toY,button:'left',clickCount:1},sessionId)
+  await setOutputPanel(cdp,sessionId,panelOpen)
+}
+
 async function setControlValue(cdp, sessionId, selector, value) {
   const quotedSelector = JSON.stringify(selector)
   const quotedValue = JSON.stringify(String(value))
@@ -1440,7 +1438,6 @@ async function runPendingInvalidReplacementRegression({ cdp, fixturePath, invali
       await setFileInput(cdp, sessionId, pendingFixturePath)
       await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(baseline.sourceUrl)} && document.querySelector('.stage-image')?.naturalWidth === 1000 && document.querySelector('.stage-image')?.naturalHeight === 600`, `${invalidLabel} pending source commit`)
     } else {
-      await openDetails(cdp, sessionId, '.advanced-controls')
       await setControlValue(cdp, sessionId, '#resize-width', '8')
       await waitForDom(cdp, sessionId, `document.querySelector('#resize-width')?.value === '8'`, `${invalidLabel} edited output dimensions`)
     }
@@ -1614,7 +1611,7 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
     }, 'the held edit preview before reset', PR8_ASSERTION_TIMEOUT_MS)
 
     await clickButton(cdp, sessionId, 'リセット')
-    await waitForDom(cdp, sessionId, `[...document.querySelectorAll('.crop-coordinates input')].map((input) => input.value).join(',') === '0,0,16,32'`, 'the reset edit state while decode and Worker work are pending')
+    await waitForDom(cdp, sessionId, `['left','top','width','height'].map(key => document.querySelector('.crop-rectangle')?.style[key]).join(',') === '0%,0%,100%,100%'`, 'the reset edit state while decode and Worker work are pending')
     assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The held edit Worker request was not released after reset.')
     assert(await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.release()') === true, 'The held replacement decode was not released after reset.')
 
@@ -1990,39 +1987,37 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="original"]').click()`)
   await waitForDom(cdp,sessionId,`(() => {
     const icon = document.querySelector('[data-aspect-ratio="original"] .aspect-icon').getBoundingClientRect()
-    const crop = [...document.querySelectorAll('.crop-coordinates input')].map(input => Number(input.value))
-    return Math.abs(icon.width / icon.height - 0.6) < 0.01 && Math.abs(icon.width / icon.height - crop[2] / crop[3]) < 0.01
+    const crop = document.querySelector('.crop-rectangle').getBoundingClientRect()
+    return Math.abs(icon.width / icon.height - 0.6) < 0.01 && Math.abs(icon.width / icon.height - crop.width / crop.height) < 0.01
   })()`, 'original preset icon matches the rotated crop ratio')
   await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').focus()`)
   await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',text:'\r',unmodifiedText:'\r',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},sessionId)
-  await waitForDom(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').getAttribute('aria-pressed')==='true' && document.querySelectorAll('.aspect-preset[aria-pressed="true"]').length===1 && document.querySelector('.crop-coordinates label:nth-child(3) input').value===document.querySelector('.crop-coordinates label:nth-child(4) input').value`, 'keyboard selection applies the square preset')
+  await waitForDom(cdp,sessionId,`document.querySelector('[data-aspect-ratio="1:1"]').getAttribute('aria-pressed')==='true' && document.querySelectorAll('.aspect-preset[aria-pressed="true"]').length===1 && Math.abs(document.querySelector('.crop-rectangle').getBoundingClientRect().width-document.querySelector('.crop-rectangle').getBoundingClientRect().height)<1`, 'keyboard selection applies the square preset')
   await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
-  await openDetails(cdp,sessionId,'.advanced-controls')
-  for(const [n,value] of [[2,100],[3,100],[0,500],[1,500]]) await setControlValue(cdp,sessionId,`.crop-coordinates label:nth-child(${n+1}) input`,value)
+  await resizeCropByPointer(cdp,sessionId,9,9)
   await setControlValue(cdp,sessionId,'#resize-width','200')
   await waitForFullOutput(cdp,sessionId)
   pixels.push(await assertTransformedPixels(cdp,sessionId,{rotation:90,straighten:-45,flipHorizontal:true,flipVertical:true}))
   // Crop remains keyboard and pointer operable in the straightening mode.
   await clickButton(cdp,sessionId,'傾き・反転')
-  await evaluate(cdp,sessionId,`document.querySelector('.advanced-controls').open=false`)
-  const keyboardBefore = await evaluate(cdp,sessionId,`Number(document.querySelector('.crop-coordinates input').value)`)
+  const keyboardBefore = await evaluate(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.left)`)
   await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`)
-  await waitForDom(cdp,sessionId,`Number(document.querySelector('.crop-coordinates input').value)===${keyboardBefore + 1}`,'keyboard crop move')
-  const cropBefore=await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates input').value`)
+  await waitForDom(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.left)>${keyboardBefore}`,'keyboard crop move')
+  const cropBefore=await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.left`)
   const r=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-rectangle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...r,button:'left',clickCount:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:r.x+10,y:r.y+10,button:'left',buttons:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:r.x+10,y:r.y+10,button:'left',clickCount:1},sessionId)
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates input').value !== '${cropBefore}'`),'Pointer crop move did not update geometry.')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.left !== '${cropBefore}'`),'Pointer crop move did not update geometry.')
   await waitForFullOutput(cdp,sessionId)
 
-  const beforeResize=await evaluate(cdp,sessionId,`document.querySelector('.crop-coordinates label:nth-child(3) input').value`)
+  const beforeResize=await evaluate(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)`)
   const handle=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-handle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...handle,button:'left',clickCount:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:handle.x-10,y:handle.y-10,button:'left',buttons:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:handle.x-10,y:handle.y-10,button:'left',clickCount:1},sessionId)
-  assert(await evaluate(cdp,sessionId,`Number(document.querySelector('.crop-coordinates label:nth-child(3) input').value)<${beforeResize}`),'Crop resize must work in straightening mode.')
+  assert(await evaluate(cdp,sessionId,`Number(parseFloat(document.querySelector('.crop-rectangle').style.width))<${beforeResize}`),'Crop resize must work in straightening mode.')
   const edgeStart = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-rectangle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...edgeStart,button:'left',clickCount:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:edgeStart.x+1000,y:edgeStart.y,button:'left',buttons:1},sessionId)
@@ -2067,7 +2062,9 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await captureScreenshot(cdp,sessionId,`editor-compare-${viewport.width}.png`)
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
-  await setControlValue(cdp,sessionId,'#composition-guide','golden')
+  await selectEditorView(cdp,sessionId,'edit')
+  assert(await evaluate(cdp,sessionId,`!document.querySelector('.advanced-controls,#composition-guide,#zoom,#pan-x,#pan-y,.crop-coordinates') && Math.abs(parseFloat(getComputedStyle(document.querySelector('.crop-grid')).getPropertyValue('--crop-grid-first-stop'))-100/3)<0.001 && getComputedStyle(document.querySelector('.crop-grid')).backgroundImage!=='none'`),'Crop must use a fixed thirds grid without advanced or guide controls.')
+  await selectEditorView(cdp,sessionId,'compare')
   assert(await evaluate(cdp,sessionId,`document.querySelector('#comparison-split').value==='65'`),'Comparison boundary was not persistent.')
 
   await setOutputPanel(cdp,sessionId,true)
@@ -2150,15 +2147,15 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await setControlValue(cdp,sessionId,'#output-format','image/png')
   await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
   await setControlValue(cdp,sessionId,'#resize-width','1001')
-  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(3) input','7')
-  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(4) input','3')
+  await resizeCropByPointer(cdp,sessionId,0.7,0.5)
   await waitForFullOutput(cdp,sessionId)
   await selectEditorView(cdp,sessionId,'compare')
   const rounded=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.processed-preview').getBoundingClientRect(),v=document.querySelector('.comparison-viewport').getBoundingClientRect();return {quickWidth:Number(document.querySelector('.workspace').dataset.quickWidth),quickHeight:Number(document.querySelector('.workspace').dataset.quickHeight),error:Math.abs(r.width-v.width)+Math.abs(r.height-v.height)}})()`)
   assert(rounded.quickWidth===960 && rounded.quickHeight===411 && rounded.error<1,'Rounded preview geometry drifted.')
   await setControlValue(cdp,sessionId,'#resize-width','')
-  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(3) input','1')
-  await setControlValue(cdp,sessionId,'.crop-coordinates label:nth-child(4) input','1')
+  await selectEditorView(cdp,sessionId,'edit')
+  await resizeCropByPointer(cdp,sessionId,0,0)
+  await selectEditorView(cdp,sessionId,'compare')
   await waitForFullOutput(cdp,sessionId)
   assert(await evaluate(cdp,sessionId,`document.querySelector('.processed-preview').naturalWidth===1 && document.querySelector('.processed-preview').naturalHeight===1`),'Tiny crop did not produce a 1px result.')
 

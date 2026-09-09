@@ -44,15 +44,6 @@ const ASPECT_OPTIONS: readonly { value: AspectRatioPreset; label: string }[] = [
   { value: '9:16', label: '9:16' },
 ]
 
-type CompositionGuide = 'none' | 'thirds' | 'golden' | 'diagonal'
-
-const COMPOSITION_GUIDE_OPTIONS: readonly { value: CompositionGuide; label: string }[] = [
-  { value: 'none', label: 'なし' },
-  { value: 'thirds', label: '三分割' },
-  { value: 'golden', label: '黄金比' },
-  { value: 'diagonal', label: '対角線' },
-]
-
 const OUTPUT_OPTIONS: readonly { value: OutputMime; label: string }[] = [
   { value: 'image/jpeg', label: 'JPEG' },
   { value: 'image/png', label: 'PNG' },
@@ -92,7 +83,6 @@ function App() {
   const [outputOpen, setOutputOpen] = useState(true)
   const outputToggleRef = useRef<HTMLButtonElement>(null)
   const editChangedAtRef = useRef(0)
-  const [compositionGuide, setCompositionGuide] = useState<CompositionGuide>('thirds')
   const [renderedResult, setRenderedResult] = useState<RasterResult | undefined>()
   const [renderedUrl, setRenderedUrl] = useState('')
   const [renderedIsPreview, setRenderedIsPreview] = useState(true)
@@ -515,23 +505,6 @@ function App() {
     })
   }
 
-  const updateCropField = (field: keyof Pick<CropRect, 'x' | 'y' | 'width' | 'height'>, value: number) => {
-    if (!Number.isFinite(value) || !geometry) {
-      return
-    }
-    updateEditState((current) => {
-      const minimum = field === 'x' || field === 'y' ? 0 : 1
-      const nextCrop = { ...geometry.crop, [field]: Math.max(minimum, value) }
-      return {
-        ...current,
-        crop: constrainCrop(nextCrop, geometry.displaySize, current.aspectRatio),
-        zoom: 1,
-        panX: 0,
-        panY: 0,
-      }
-    })
-  }
-
   const updateResize = (field: 'width' | 'height', rawValue: string) => {
     const numericValue = rawValue === '' ? undefined : Number(rawValue)
     if (numericValue !== undefined && (!Number.isFinite(numericValue) || numericValue < 1)) {
@@ -837,14 +810,7 @@ function App() {
                       onKeyDown={moveCropWithKeyboard}
                       onPointerDown={(event) => beginCropInteraction(event, 'move')}
                     >
-                      {compositionGuide === 'diagonal' ? (
-                        <svg className="crop-guide crop-guide-diagonal" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                          <line x1="0" y1="0" x2="100" y2="100" />
-                          <line x1="0" y1="100" x2="100" y2="0" />
-                        </svg>
-                      ) : (
-                        <span className={`crop-guide${compositionGuide === 'thirds' || compositionGuide === 'golden' ? ' crop-grid' : ''} crop-guide-${compositionGuide}`} aria-hidden="true" />
-                      )}
+                      <span className="crop-guide crop-grid" aria-hidden="true" />
                       <button
                         className="crop-handle"
                         type="button"
@@ -1002,52 +968,6 @@ function App() {
                   )
                 })}
               </div>
-                  <div className="guide-control">
-                    <label htmlFor="composition-guide">構図補助線</label>
-                    <select id="composition-guide" value={compositionGuide} onChange={(event) => setCompositionGuide(event.target.value as CompositionGuide)}>
-                      {COMPOSITION_GUIDE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                  </div>
-            <details className="advanced-controls">
-              <summary>詳細</summary>
-              <div className="advanced-controls-body">
-                <div className="crop-coordinates" aria-label="切り抜き数値 controls">
-                  <label>
-                    X
-                    <input type="number" min="0" step="1" value={Math.round(currentCrop.x)} onChange={(event) => updateCropField('x', event.currentTarget.valueAsNumber)} />
-                  </label>
-                  <label>
-                    Y
-                    <input type="number" min="0" step="1" value={Math.round(currentCrop.y)} onChange={(event) => updateCropField('y', event.currentTarget.valueAsNumber)} />
-                  </label>
-                  <label>
-                    幅
-                    <input type="number" min="1" step="1" value={Math.round(currentCrop.width)} onChange={(event) => updateCropField('width', event.currentTarget.valueAsNumber)} />
-                  </label>
-                  <label>
-                    高さ
-                    <input type="number" min="1" step="1" value={Math.round(currentCrop.height)} onChange={(event) => updateCropField('height', event.currentTarget.valueAsNumber)} />
-                  </label>
-                </div>
-
-                <div className="control-card">
-                  <div className="range-control">
-                    <div className="range-label"><label htmlFor="zoom">ズーム</label><output htmlFor="zoom">{(editState.zoom ?? 1).toFixed(2)}×</output></div>
-                    <input id="zoom" type="range" min="1" max="8" step="0.01" value={editState.zoom ?? 1} onChange={(event) => updateEditState((current) => ({ ...current, zoom: Number(event.target.value) }))} />
-                  </div>
-                  <div className="range-control">
-                    <div className="range-label"><label htmlFor="pan-x">パン X</label><output htmlFor="pan-x">{(editState.panX ?? 0).toFixed(2)}</output></div>
-                    <input id="pan-x" type="range" min="-1" max="1" step="0.01" value={editState.panX ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panX: Number(event.target.value) }))} />
-                  </div>
-                  <div className="range-control">
-                    <div className="range-label"><label htmlFor="pan-y">パン Y</label><output htmlFor="pan-y">{(editState.panY ?? 0).toFixed(2)}</output></div>
-                    <input id="pan-y" type="range" min="-1" max="1" step="0.01" value={editState.panY ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panY: Number(event.target.value) }))} />
-                  </div>
-                  <p className="control-hint">画像上の範囲をドラッグするか、数値・スライダーで同じ操作ができます。</p>
-                </div>
-
-              </div>
-            </details>
             </div>
             <div className="mode-controls transform-controls" hidden={editorMode !== 'transform' || editorView !== 'edit'}>
               <div className="straighten-control range-control">
