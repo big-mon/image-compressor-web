@@ -33,6 +33,7 @@ const SCREENSHOT_DIRECTORY = process.env.E2E_SCREENSHOT_DIR ? resolve(process.en
 const PR8_ASSERTION_TIMEOUT_MS = 3_000
 const DESKTOP_VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }
 const MOBILE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }
+const TABLET_VIEWPORTS = [{ width: 820, height: 1180, deviceScaleFactor: 2, mobile: true }, { width: 1180, height: 820, deviceScaleFactor: 2, mobile: true }]
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -948,6 +949,10 @@ async function assertEmptyFirstView(cdp, sessionId, viewport, mode) {
   assert(layout.privacyDetails?.open === false, `Technical privacy details must remain collapsed on empty ${mode}: ${JSON.stringify(layout.privacyDetails)}`)
   assertInsideViewport(layout.reassurance, viewport, `no-upload reassurance on empty ${mode}`)
   assert(layout.noHorizontalOverflow, `Empty ${mode} layout overflows horizontally: ${JSON.stringify(layout)}`)
+  assert(await evaluate(cdp,sessionId,`document.documentElement.scrollHeight <= innerHeight+1 && document.body.scrollHeight <= innerHeight+1 && !document.querySelector('.static-content').open`),'Initial screen requires vertical scrolling.')
+  for (const selector of ['.privacy-details summary','.site-footer','.static-content summary']) {
+    assert(await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('${selector}').getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight})()`),'Initial control escaped the viewport: '+selector)
+  }
   const focusReachedDropZone = await evaluate(cdp, sessionId, `(() => {
     const dropZone = document.querySelector('.drop-zone')
     dropZone?.focus()
@@ -1911,9 +1916,11 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     URL.revokeObjectURL = url => { window.__e2eBlobs.delete(url); window.__e2eRevoked.push(url); revoke(url) }
   })()`)
   await assertPublicMetadataAndFooter(cdp, sessionId, basePath)
-  await assertEmptyFirstView(cdp, sessionId, DESKTOP_VIEWPORT, 'desktop')
-  await setViewport(cdp, sessionId, MOBILE_VIEWPORT)
-  await assertEmptyFirstView(cdp, sessionId, MOBILE_VIEWPORT, 'mobile')
+  for (const viewport of [...TABLET_VIEWPORTS, DESKTOP_VIEWPORT, MOBILE_VIEWPORT]) {
+    await setViewport(cdp,sessionId,viewport)
+    await assertEmptyFirstView(cdp,sessionId,viewport,'initial')
+    await captureScreenshot(cdp,sessionId,`initial-${viewport.width}-${viewport.height}.png`)
+  }
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
   assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'true' && !document.querySelector('#output-panel').hidden`), 'Output panel must start expanded.')
@@ -1945,7 +1952,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp, sessionId, `document.querySelector('.stage-image').naturalWidth === 16 && document.querySelector('.stage-image').naturalHeight === 32`), 'EXIF orientation was not normalized.')
   assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'false'`), 'Saving must preserve the minimized output panel.')
   const layouts = []
-  for (const viewport of [DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
+  for (const viewport of [...TABLET_VIEWPORTS,DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
     for(const open of [false,true]) {
       layouts.push(await assertEditorLayout(cdp,sessionId,viewport,open))
       await captureScreenshot(cdp,sessionId,`editor-${viewport.width}-${viewport.height}-${open?'output':'crop'}.png`)
