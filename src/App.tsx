@@ -966,8 +966,12 @@ function App() {
               </button>
               </div>
             <aside id="output-panel" className="settings-column" aria-label="圧縮" hidden={!outputOpen}>
-                <details className="compression-section" id="quality-settings">
+                <details className="compression-section" id="quality-settings" open>
                   <summary>画質</summary>
+                  <label className="visually-hidden" htmlFor="output-format">形式</label>
+                  <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
+                    {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
                   {outputMime === 'image/png' ? (
                     <p className="comparison-quality-note">PNGでは画質の設定はありません。</p>
                   ) : (
@@ -976,13 +980,6 @@ function App() {
                       <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
                     </div>
                   )}
-                </details>
-                <details className="compression-section" id="format-settings">
-                  <summary>形式</summary>
-                  <label className="visually-hidden" htmlFor="output-format">形式</label>
-                  <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
-                    {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
                 </details>
                 <details className="compression-section" id="resize-settings">
                   <summary>出力サイズ</summary>
