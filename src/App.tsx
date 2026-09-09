@@ -44,15 +44,6 @@ const ASPECT_OPTIONS: readonly { value: AspectRatioPreset; label: string }[] = [
   { value: '9:16', label: '9:16' },
 ]
 
-type CompositionGuide = 'none' | 'thirds' | 'golden' | 'diagonal'
-
-const COMPOSITION_GUIDE_OPTIONS: readonly { value: CompositionGuide; label: string }[] = [
-  { value: 'none', label: 'なし' },
-  { value: 'thirds', label: '三分割' },
-  { value: 'golden', label: '黄金比' },
-  { value: 'diagonal', label: '対角線' },
-]
-
 const OUTPUT_OPTIONS: readonly { value: OutputMime; label: string }[] = [
   { value: 'image/jpeg', label: 'JPEG' },
   { value: 'image/png', label: 'PNG' },
@@ -92,7 +83,6 @@ function App() {
   const [outputOpen, setOutputOpen] = useState(true)
   const outputToggleRef = useRef<HTMLButtonElement>(null)
   const editChangedAtRef = useRef(0)
-  const [compositionGuide, setCompositionGuide] = useState<CompositionGuide>('thirds')
   const [renderedResult, setRenderedResult] = useState<RasterResult | undefined>()
   const [renderedUrl, setRenderedUrl] = useState('')
   const [renderedIsPreview, setRenderedIsPreview] = useState(true)
@@ -515,23 +505,6 @@ function App() {
     })
   }
 
-  const updateCropField = (field: keyof Pick<CropRect, 'x' | 'y' | 'width' | 'height'>, value: number) => {
-    if (!Number.isFinite(value) || !geometry) {
-      return
-    }
-    updateEditState((current) => {
-      const minimum = field === 'x' || field === 'y' ? 0 : 1
-      const nextCrop = { ...geometry.crop, [field]: Math.max(minimum, value) }
-      return {
-        ...current,
-        crop: constrainCrop(nextCrop, geometry.displaySize, current.aspectRatio),
-        zoom: 1,
-        panX: 0,
-        panY: 0,
-      }
-    })
-  }
-
   const updateResize = (field: 'width' | 'height', rawValue: string) => {
     const numericValue = rawValue === '' ? undefined : Number(rawValue)
     if (numericValue !== undefined && (!Number.isFinite(numericValue) || numericValue < 1)) {
@@ -630,7 +603,7 @@ function App() {
     }
   }
 
-  const moveCropWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
+  const editCropWithKeyboard = (event: React.KeyboardEvent<HTMLElement>, mode: CropInteractionMode) => {
     if (!geometry) {
       return
     }
@@ -648,13 +621,22 @@ function App() {
       return
     }
     event.preventDefault()
-    updateEditState((current) => ({
-      ...current,
-      crop: translateCrop(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
-      zoom: 1,
-      panX: 0,
-      panY: 0,
-    }))
+    event.stopPropagation()
+    updateEditState((current) => {
+      // Follow the ratio in both axes so projection preserves the pressed axis's step.
+      const resizeDelta = current.aspectRatio === 'free' ? delta : delta.x !== 0
+        ? { x: delta.x, y: delta.x * geometry.crop.height / geometry.crop.width }
+        : { x: delta.y * geometry.crop.width / geometry.crop.height, y: delta.y }
+      return {
+        ...current,
+        crop: mode === 'resize'
+          ? resizeCropFromBottomRight(geometry.crop, resizeDelta, geometry.displaySize, current.aspectRatio)
+          : translateCrop(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
+        zoom: 1,
+        panX: 0,
+        panY: 0,
+      }
+    })
   }
 
   const moveComparisonBoundary = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -834,21 +816,15 @@ function App() {
                       role="group"
                       tabIndex={0}
                       aria-label="切り抜き範囲。矢印キーで移動、Shiftで大きく移動"
-                      onKeyDown={moveCropWithKeyboard}
+                      onKeyDown={(event) => editCropWithKeyboard(event, 'move')}
                       onPointerDown={(event) => beginCropInteraction(event, 'move')}
                     >
-                      {compositionGuide === 'diagonal' ? (
-                        <svg className="crop-guide crop-guide-diagonal" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-                          <line x1="0" y1="0" x2="100" y2="100" />
-                          <line x1="0" y1="100" x2="100" y2="0" />
-                        </svg>
-                      ) : (
-                        <span className={`crop-guide${compositionGuide === 'thirds' || compositionGuide === 'golden' ? ' crop-grid' : ''} crop-guide-${compositionGuide}`} aria-hidden="true" />
-                      )}
+                      <span className="crop-guide crop-grid" aria-hidden="true" />
                       <button
                         className="crop-handle"
                         type="button"
-                        aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ"
+                        aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ。矢印キーでサイズ変更、Shiftで大きく変更"
+                        onKeyDown={(event) => editCropWithKeyboard(event, 'resize')}
                         onPointerDown={(event) => beginCropInteraction(event, 'resize')}
                       />
                     </div>
@@ -966,28 +942,22 @@ function App() {
               </button>
               </div>
             <aside id="output-panel" className="settings-column" aria-label="圧縮" hidden={!outputOpen}>
-                <details className="compression-section" id="quality-settings" open>
-                  <summary>画質</summary>
-                  <label className="visually-hidden" htmlFor="output-format">形式</label>
-                  <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
-                    {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                  {outputMime === 'image/png' ? (
-                    <p className="comparison-quality-note">PNGでは画質の設定はありません。</p>
-                  ) : (
-                    <div className="range-control">
-                      <div className="range-label"><label htmlFor="quality">画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
-                      <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
-                    </div>
-                  )}
-                </details>
-                <details className="compression-section" id="resize-settings">
-                  <summary>出力サイズ</summary>
-                  <div className="resize-fields">
-                    <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
-                    <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
+                <label className="visually-hidden" htmlFor="output-format">形式</label>
+                <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
+                  {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+                {outputMime === 'image/png' ? (
+                  <p className="comparison-quality-note">PNGでは画質の設定はありません。</p>
+                ) : (
+                  <div className="range-control">
+                    <div className="range-label"><label htmlFor="quality">画質</label><output htmlFor="quality">{Math.round(quality * 100)}%</output></div>
+                    <input id="quality" type="range" min="0.01" max="1" step="0.01" value={quality} onChange={(event) => updateQuality(Number(event.target.value))} />
                   </div>
-                </details>
+                )}
+                <div className="resize-fields">
+                  <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
+                  <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
+                </div>
                 <div className="reduction-line" role="status" aria-live="polite"><strong>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
@@ -1008,52 +978,6 @@ function App() {
                   )
                 })}
               </div>
-                  <div className="guide-control">
-                    <label htmlFor="composition-guide">構図補助線</label>
-                    <select id="composition-guide" value={compositionGuide} onChange={(event) => setCompositionGuide(event.target.value as CompositionGuide)}>
-                      {COMPOSITION_GUIDE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                  </div>
-            <details className="advanced-controls">
-              <summary>詳細</summary>
-              <div className="advanced-controls-body">
-                <div className="crop-coordinates" aria-label="切り抜き数値 controls">
-                  <label>
-                    X
-                    <input type="number" min="0" step="1" value={Math.round(currentCrop.x)} onChange={(event) => updateCropField('x', event.currentTarget.valueAsNumber)} />
-                  </label>
-                  <label>
-                    Y
-                    <input type="number" min="0" step="1" value={Math.round(currentCrop.y)} onChange={(event) => updateCropField('y', event.currentTarget.valueAsNumber)} />
-                  </label>
-                  <label>
-                    幅
-                    <input type="number" min="1" step="1" value={Math.round(currentCrop.width)} onChange={(event) => updateCropField('width', event.currentTarget.valueAsNumber)} />
-                  </label>
-                  <label>
-                    高さ
-                    <input type="number" min="1" step="1" value={Math.round(currentCrop.height)} onChange={(event) => updateCropField('height', event.currentTarget.valueAsNumber)} />
-                  </label>
-                </div>
-
-                <div className="control-card">
-                  <div className="range-control">
-                    <div className="range-label"><label htmlFor="zoom">ズーム</label><output htmlFor="zoom">{(editState.zoom ?? 1).toFixed(2)}×</output></div>
-                    <input id="zoom" type="range" min="1" max="8" step="0.01" value={editState.zoom ?? 1} onChange={(event) => updateEditState((current) => ({ ...current, zoom: Number(event.target.value) }))} />
-                  </div>
-                  <div className="range-control">
-                    <div className="range-label"><label htmlFor="pan-x">パン X</label><output htmlFor="pan-x">{(editState.panX ?? 0).toFixed(2)}</output></div>
-                    <input id="pan-x" type="range" min="-1" max="1" step="0.01" value={editState.panX ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panX: Number(event.target.value) }))} />
-                  </div>
-                  <div className="range-control">
-                    <div className="range-label"><label htmlFor="pan-y">パン Y</label><output htmlFor="pan-y">{(editState.panY ?? 0).toFixed(2)}</output></div>
-                    <input id="pan-y" type="range" min="-1" max="1" step="0.01" value={editState.panY ?? 0} onChange={(event) => updateEditState((current) => ({ ...current, panY: Number(event.target.value) }))} />
-                  </div>
-                  <p className="control-hint">画像上の範囲をドラッグするか、数値・スライダーで同じ操作ができます。</p>
-                </div>
-
-              </div>
-            </details>
             </div>
             <div className="mode-controls transform-controls" hidden={editorMode !== 'transform' || editorView !== 'edit'}>
               <div className="straighten-control range-control">
