@@ -792,6 +792,8 @@ async function setViewport(cdp, sessionId, viewport) {
     screenWidth: viewport.width,
     screenHeight: viewport.height,
   }, sessionId)
+  // Allow layout and ResizeObserver delivery before inspecting the resized UI.
+  await evaluate(cdp,sessionId,`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))`)
 }
 
 async function captureScreenshot(cdp, sessionId, filename) {
@@ -1221,6 +1223,19 @@ async function resizeCropByPointer(cdp, sessionId, width, height) {
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:drag.toX,y:drag.toY,button:'left',buttons:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:drag.toX,y:drag.toY,button:'left',clickCount:1},sessionId)
   await setOutputPanel(cdp,sessionId,panelOpen)
+}
+
+async function assertUnobstructedCropResize(cdp, sessionId) {
+  const target = await evaluate(cdp,sessionId,`(() => {
+    const h=document.querySelector('.crop-handle'),r=h.getBoundingClientRect()
+    const controls=[...document.querySelectorAll('.tool-toolbar,.view-switch,.output-menu,.editor-bottom')].map(e=>e.getBoundingClientRect()).filter(b=>b.width&&b.height)
+    return {x:r.x+r.width/2,y:r.y+r.height/2,width:parseFloat(document.querySelector('.crop-rectangle').style.width),clear:controls.every(b=>r.right<=b.left||r.left>=b.right||r.bottom<=b.top||r.top>=b.bottom),hit:h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}
+  })()`)
+  assert(target.clear && target.hit, 'Resize target overlaps a floating control: '+JSON.stringify(target))
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:target.x,y:target.y,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:target.x-4,y:target.y-4,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:target.x-4,y:target.y-4,button:'left',clickCount:1},sessionId)
+  await waitForDom(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)<${target.width} && !document.querySelector('#output-panel').hidden`, 'pointer resize with compression still open')
 }
 
 async function setControlValue(cdp, sessionId, selector, value) {
@@ -2177,6 +2192,30 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await installPreviewDebounceGate(cdp,sessionId)
   await runPreDebounceInvalidReplacementRegression({cdp,sessionId,fixturePath,invalidFixturePath:unsupportedFixturePath,invalidLabel:'unsupported',pendingFixturePath:cropDragFixturePath})
   await removeE2EGates(cdp,sessionId)
+
+  // Tall images and crops behind compression must retain pointer resizing.
+  const portraitData=await evaluate(cdp,sessionId,`(()=>{const c=document.createElement('canvas');c.width=100;c.height=1000;const x=c.getContext('2d');x.fillStyle='orange';x.fillRect(0,0,100,1000);return c.toDataURL().split(',')[1]})()`)
+  const portraitPath=join(dirname(cropDragFixturePath),'portrait-handle.png')
+  await writeFile(portraitPath,Buffer.from(portraitData,'base64'))
+  await setViewport(cdp,sessionId,{...MOBILE_VIEWPORT,width:820,height:1180})
+  await setFileInput(cdp,sessionId,portraitPath)
+  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image').naturalWidth===100 && document.querySelector('.stage-image').naturalHeight===1000`, 'portrait image for handle overlap')
+  await waitForFullOutput(cdp,sessionId)
+  await setOutputPanel(cdp,sessionId,true)
+  assert(await evaluate(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').getBoundingClientRect(),b=document.querySelector('.editor-bottom').getBoundingClientRect();return c.right-22>b.left&&c.right-22<b.right&&c.bottom-22>b.top})()`),'Portrait fixture must place its crop corner under the bottom panel.')
+  await assertUnobstructedCropResize(cdp,sessionId)
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await setFileInput(cdp,sessionId,cropDragFixturePath)
+  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image').naturalWidth===1000`, 'landscape source for compression overlap')
+  await waitForFullOutput(cdp,sessionId)
+  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
+  await resizeCropByPointer(cdp,sessionId,10,10)
+  const move=await evaluate(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').getBoundingClientRect(),p=document.querySelector('.output-menu').getBoundingClientRect();return {x:c.x+8,y:c.y+8,toX:p.x+p.width/2-c.width+8,toY:p.y+p.height/2-c.height+8}})()`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:move.x,y:move.y,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:move.toX,y:move.toY,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:move.toX,y:move.toY,button:'left',clickCount:1},sessionId)
+  await waitForDom(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').getBoundingClientRect(),p=document.querySelector('.output-menu').getBoundingClientRect();return c.right>p.left&&c.right<p.right&&c.bottom>p.top&&c.bottom<p.bottom})()`, 'crop corner beneath compression')
+  await assertUnobstructedCropResize(cdp,sessionId)
 
   // A small top-centre crop must stay resizable below the edit/compare switch.
   const beforeTopCropSource = await evaluate(cdp,sessionId,`document.querySelector('.stage-image').src`)

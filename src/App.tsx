@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from 'react'
 
 import { isSameResultIntent, type ResultIntent } from './app-async'
@@ -29,6 +29,7 @@ import {
 } from './image/raster'
 import {
   createCropSurfaceStyle,
+  placeCropHandle,
   createStageTransform,
 } from './image/stage'
 
@@ -735,12 +736,31 @@ function App() {
         maxWidth: `min(100%, calc(100cqh * ${geometry.crop.width / geometry.crop.height}))`,
       }
     : undefined
-  const fittedWidth = geometry ? `min(100vw, calc(100dvh * ${geometry.displaySize.width / geometry.displaySize.height}))` : '0px'
-  const fittedHeight = geometry ? `min(100dvh, calc(100vw * ${geometry.displaySize.height / geometry.displaySize.width}))` : '0px'
-  const cropHandleStyle: CSSProperties | undefined = geometry ? {
-    left: `clamp(0px, calc((100vw - ${fittedWidth}) / 2 + ${fittedWidth} * ${(currentCrop.x + currentCrop.width) / geometry.displaySize.width} - 2.75rem), calc(100vw - 2.75rem))`,
-    top: `clamp(var(--view-switch-bottom), calc((100dvh - ${fittedHeight}) / 2 + ${fittedHeight} * ${(currentCrop.y + currentCrop.height) / geometry.displaySize.height} - 2.75rem), calc(100dvh - 2.75rem))`,
-  } : undefined
+  useLayoutEffect(() => {
+    if (!geometry || editorView !== 'edit') return
+    const stage = cropSurfaceRef.current?.closest('.stage-area')
+    const crop = stage?.querySelector<HTMLElement>('.crop-rectangle')
+    const handle = stage?.querySelector<HTMLButtonElement>('.crop-handle')
+    const shell = stage?.closest('.editor-shell')
+    if (!stage || !crop || !handle || !shell) return
+    const controls = [...shell.querySelectorAll<HTMLElement>('.tool-toolbar,.view-switch,.output-menu,.editor-bottom,.error-message')]
+    const placeHandle = () => {
+      const frame = stage.getBoundingClientRect()
+      const bounds = crop.getBoundingClientRect()
+      const position = placeCropHandle(
+        { x: bounds.right, y: bounds.bottom },
+        { width: frame.width, height: frame.height },
+        handle.getBoundingClientRect().width,
+        controls.map(control => control.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0),
+      )
+      handle.style.left = `${position.left}px`
+      handle.style.top = `${position.top}px`
+    }
+    placeHandle()
+    const observer = new ResizeObserver(placeHandle)
+    for (const element of [shell, stage, crop, ...controls]) observer.observe(element)
+    return () => observer.disconnect()
+  }, [geometry, editorView, editorMode, outputOpen, errorMessage])
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
         left: `${-currentCrop.x / currentCrop.width * 100}%`,
@@ -828,7 +848,6 @@ function App() {
                       <span className="crop-guide crop-grid" aria-hidden="true" />
                       <button
                         className="crop-handle"
-                        style={cropHandleStyle}
                         type="button"
                         aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ。矢印キーでサイズ変更、Shiftで大きく変更"
                         onKeyDown={(event) => editCropWithKeyboard(event, 'resize')}

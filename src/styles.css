@@ -974,7 +974,6 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .editor-shell {
   --view-switch-top: 4rem;
   --view-switch-padding: 0.25rem;
-  --view-switch-bottom: calc(var(--view-switch-top) + 2.75rem + var(--view-switch-padding) * 2 + env(safe-area-inset-top));
   display: flex;
   flex-direction: column;
   height: 100dvh;
