@@ -972,6 +972,9 @@ input[type="range"] {
 body:has(.editor-shell) > .static-content { display: none; }
 html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { height: 100dvh; min-height: 0; overflow: hidden; }
 .editor-shell {
+  --view-switch-top: 4rem;
+  --view-switch-padding: 0.25rem;
+  --view-switch-bottom: calc(var(--view-switch-top) + 2.75rem + var(--view-switch-padding) * 2 + env(safe-area-inset-top));
   display: flex;
   flex-direction: column;
   height: 100dvh;
@@ -1009,7 +1012,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   overflow: hidden;
 }
 .editor-shell .editor-column { position: fixed; inset: 0; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
-.view-switch { position: absolute; z-index: 10; top: calc(4rem + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; justify-content: center; gap: 0.25rem; padding: 0.25rem; border-radius: 0.75rem; background: var(--panel); }
+.view-switch { position: absolute; z-index: 10; top: calc(var(--view-switch-top) + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; justify-content: center; gap: 0.25rem; padding: var(--view-switch-padding); border-radius: 0.75rem; background: var(--panel); }
 .view-switch button { min-width: 5rem; }
 .view-switch button, .edit-modes button {
   min-height: 2.75rem;
@@ -1134,7 +1137,7 @@ input[type="number"], select { background-color: #101010; }
 }
 @media (max-height: 500px) {
   .editor-shell .tool-toolbar { min-height: 2.75rem; padding-block: 0; }
-  .view-switch { top: calc(3rem + env(safe-area-inset-top)); padding-block: 0; }
+  .editor-shell { --view-switch-top: 3rem; --view-switch-padding: 0px; }
   .editor-bottom { padding-top: 0; }
   .edit-modes { margin: 0; }
   .edit-modes button { display: flex; align-items: center; }

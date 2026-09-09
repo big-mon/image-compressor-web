@@ -2178,6 +2178,31 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await runPreDebounceInvalidReplacementRegression({cdp,sessionId,fixturePath,invalidFixturePath:unsupportedFixturePath,invalidLabel:'unsupported',pendingFixturePath:cropDragFixturePath})
   await removeE2EGates(cdp,sessionId)
 
+  // A small top-centre crop must stay resizable below the edit/compare switch.
+  const beforeTopCropSource = await evaluate(cdp,sessionId,`document.querySelector('.stage-image').src`)
+  await setFileInput(cdp,sessionId,cropDragFixturePath)
+  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image').src!==${JSON.stringify(beforeTopCropSource)} && document.querySelector('.stage-image').naturalWidth===1000`, 'fresh source for top-centre resize regression')
+  await waitForFullOutput(cdp,sessionId)
+  await setOutputPanel(cdp,sessionId,false)
+  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
+  await resizeCropByPointer(cdp,sessionId,3,3)
+  await waitForDom(cdp,sessionId,`Math.abs(parseFloat(document.querySelector('.crop-rectangle').style.width)-3)<0.01`, 'small crop for top-centre resize regression')
+  await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').focus()`)
+  // Dispatch separately across renders so each move observes the current crop.
+  for (let i=0;i<50;i++) {
+    await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true}))`)
+  }
+  for (const viewport of [DESKTOP_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375}]) {
+    await setViewport(cdp,sessionId,viewport)
+    const placement=await evaluate(cdp,sessionId,`(()=>{const h=document.querySelector('.crop-handle'),r=h.getBoundingClientRect(),v=document.querySelector('.view-switch').getBoundingClientRect();return {handle:r.toJSON(),switch:v.toJSON(),hit:h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
+    assert(placement.handle.x<placement.switch.right && placement.handle.right>placement.switch.x && placement.handle.top>=placement.switch.bottom && placement.hit,'Top-centre crop handle is covered: '+JSON.stringify(placement))
+    await resizeCropByPointer(cdp,sessionId,4,4)
+    await waitForDom(cdp,sessionId,`Math.abs(parseFloat(document.querySelector('.crop-rectangle').style.width)-4)<0.01`,'top-centre pointer resize')
+    await resizeCropByPointer(cdp,sessionId,3,3)
+  }
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await setOutputPanel(cdp,sessionId,true)
+
   // Tiny crops and rounded reduced previews must keep a single aligned frame.
   await setFileInput(cdp,sessionId,cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)

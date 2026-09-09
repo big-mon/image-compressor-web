@@ -739,7 +739,7 @@ function App() {
   const fittedHeight = geometry ? `min(100dvh, calc(100vw * ${geometry.displaySize.height / geometry.displaySize.width}))` : '0px'
   const cropHandleStyle: CSSProperties | undefined = geometry ? {
     left: `clamp(0px, calc((100vw - ${fittedWidth}) / 2 + ${fittedWidth} * ${(currentCrop.x + currentCrop.width) / geometry.displaySize.width} - 2.75rem), calc(100vw - 2.75rem))`,
-    top: `clamp(calc(4rem + env(safe-area-inset-top)), calc((100dvh - ${fittedHeight}) / 2 + ${fittedHeight} * ${(currentCrop.y + currentCrop.height) / geometry.displaySize.height} - 2.75rem), calc(100dvh - 2.75rem))`,
+    top: `clamp(var(--view-switch-bottom), calc((100dvh - ${fittedHeight}) / 2 + ${fittedHeight} * ${(currentCrop.y + currentCrop.height) / geometry.displaySize.height} - 2.75rem), calc(100dvh - 2.75rem))`,
   } : undefined
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
