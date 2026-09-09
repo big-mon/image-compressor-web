@@ -84,7 +84,9 @@ E2E prerequisites:
 CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" BASE_PATH=/image-compressor-web/ pnpm run test:e2e
 ```
 
-この acceptance harness は Chrome v1 の証拠であり、Safari/Firefox の互換性を保証しない。
+初期画面と編集画面は、820×1180・1180×820 のタブレット相当の縦横サイズでも検証する。初期画面は画像選択・フッター・折りたたみ説明を viewport 内に収める。
+
+この acceptance harness は Chrome v1 の証拠であり、実機iPadのSafariやFirefoxの互換性を保証しない。
 
 ## Public metadata and discovery
 
@@ -92,7 +94,7 @@ CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" BASE_
 
 AEO / agent readiness の判断材料には、Cloudflare の [AEO](https://blog.cloudflare.com/aeo/) と [Agent Readiness](https://blog.cloudflare.com/agent-readiness/) の一次資料を使う。このアプリでの対応範囲は、既存の公開制御を変えず、ブラウザで人間にも読める静的HTMLと、同内容のMarkdown版ガイドを提供することに限る。Markdown応答の `Content-Type` は公開後に実ホストで確認する。API、MCP、OAuth、commerce、`llms.txt` は追加しない。
 
-作業前の公開ホスト確認では、origin root (`https://app.damonge.com/`) の `robots.txt` に `Content-Signal: ai-train=no, search=yes, ai-input=yes` と `Allow: /` があり、origin root の sitemap にこのアプリのURLが掲載されている。アプリの React root (`https://app.damonge.com/image-compressor-web/`) に `Accept: text/markdown` を付けた応答は `200 OK`、`Content-Type: text/markdown`、`Vary: Accept` だったが、SPAのReact rootが空だったため本文はtitleとdescriptionのfrontmatterだけだった。本変更では `index.html` のReact root後に常設の説明本文を置き、`guide.html` と `guide.md` を追加する。
+作業前の公開ホスト確認では、origin root (`https://app.damonge.com/`) の `robots.txt` に `Content-Signal: ai-train=no, search=yes, ai-input=yes` と `Allow: /` があり、origin root の sitemap にこのアプリのURLが掲載されている。アプリの React root (`https://app.damonge.com/image-compressor-web/`) に `Accept: text/markdown` を付けた応答は `200 OK`、`Content-Type: text/markdown`、`Vary: Accept` だったが、SPAのReact rootが空だったため本文はtitleとdescriptionのfrontmatterだけだった。`index.html` のReact root後に使い方の説明を native details として置き、`guide.html` と `guide.md` へ案内する。JavaScriptの起動時は説明を折りたたみ、無効時は本文を展開した状態で表示する。
 
 この変更を公開した後、origin rootとアプリのReact rootを区別して、root本文、`guide.html` のcanonical、`guide.md` の相対リンク、Markdown応答の `Content-Type` と `Vary` を実ホストで再確認する。CloudflareのAEO / Agent ReadinessのVisibility metricsやスコア改善は、デプロイ後の実測が必要であり、このリポジトリでは改善結果を主張しない。
 

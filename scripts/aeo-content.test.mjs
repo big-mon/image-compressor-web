@@ -7,7 +7,7 @@ const BASE_PATH = '/image-compressor-web/'
 const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
 const guideHtml = readFileSync(new URL('../public/guide.html', import.meta.url), 'utf8')
 const guideMarkdown = readFileSync(new URL('../public/guide.md', import.meta.url), 'utf8')
-const staticSection = indexHtml.match(/<section class="static-content"[\s\S]*?<\/section>/)?.[0] ?? ''
+const staticSection = indexHtml.match(/<details class="static-content"[\s\S]*?<\/details>/)?.[0] ?? ''
 
 const guideContentAnchors = [
   'JPEG・PNG・WebP',
@@ -35,13 +35,14 @@ function resolveGuideHref(rawHref) {
 describe('static AEO content', () => {
   it('publishes a readable app description after the empty React root', () => {
     const rootEnd = indexHtml.indexOf('<div id="root"></div>')
-    const staticStart = indexHtml.indexOf('<section class="static-content"')
+    const staticStart = indexHtml.indexOf('<details class="static-content"')
     const moduleScriptStart = indexHtml.indexOf('<script type="module"')
 
     expect(rootEnd).toBeGreaterThanOrEqual(0)
     expect(staticStart).toBeGreaterThan(rootEnd)
     expect(moduleScriptStart).toBeGreaterThan(staticStart)
-    expect(staticSection).toContain('<h2 id="static-content-title">')
+    expect(staticSection).toContain('<details class="static-content" open>')
+    expect(staticSection).toContain('<summary id="static-content-title">')
     expect(staticSection).toContain('JPEG・PNG・WebP')
     expect(staticSection).toContain('画像データを外部へアップロードせず')
     expect(staticSection).toContain('Cloudflare Web Analytics')
