@@ -89,6 +89,7 @@ function App() {
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
   const editorRef = useRef<HTMLDivElement>(null)
   const spaceHeld = useRef(false)
+  const spacePanned = useRef(false)
   const panStart = useRef<{ pointerId: number; x: number; y: number; viewX: number; viewY: number } | null>(null)
   const compressionTabRef = useRef<HTMLButtonElement>(null)
   const editChangedAtRef = useRef(0)
@@ -786,7 +787,9 @@ function App() {
       const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? editor.clientHeight : 1)
       setView(current => zoomView(current, delta, { x: event.clientX - editor.clientWidth / 2, y: event.clientY - editor.clientHeight / 2 }))
     }
-    const releaseSpace = () => { spaceHeld.current = false }
+    const releaseSpace = (event: Event) => {
+      if (event.type === 'blur' || (event as KeyboardEvent).key === ' ') spaceHeld.current = false
+    }
     editor.addEventListener('wheel', wheel, { passive: false })
     window.addEventListener('keyup', releaseSpace)
     window.addEventListener('blur', releaseSpace)
@@ -808,7 +811,18 @@ function App() {
 
   return (
     <>
-      <main className={asset ? 'shell editor-shell' : 'shell'} onKeyDown={event => {
+      <main className={asset ? 'shell editor-shell' : 'shell'} onKeyDownCapture={event => {
+        if (asset && event.key === ' ') {
+          spaceHeld.current = true
+          if (!event.repeat) spacePanned.current = false
+        }
+      }} onKeyUpCapture={event => {
+        if (event.key === ' ' && spacePanned.current) {
+          event.preventDefault()
+          event.stopPropagation()
+          spaceHeld.current = false
+        }
+      }} onKeyDown={event => {
         if (outputOpen && event.key === 'Escape') {
           event.preventDefault()
           setEditorMode('crop')
@@ -835,7 +849,14 @@ function App() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
+                  if (event.key === ' ') event.preventDefault()
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    document.getElementById('image-input')?.click()
+                  }
+                }}
+                onKeyUp={event => {
+                  if (event.key === ' ') {
                     event.preventDefault()
                     document.getElementById('image-input')?.click()
                   }
@@ -849,7 +870,7 @@ function App() {
           <section className="workspace" aria-label="画像エディター" data-quick-width={quickPreviewMetrics?.outputWidth} data-quick-height={quickPreviewMetrics?.outputHeight} data-quick-bytes={quickPreviewMetrics?.outputBytes}>
             <div className="editor-column" ref={editorRef} data-view-zoom={view.zoom}
               onKeyDown={event => {
-                if (event.key === ' ') { event.preventDefault(); spaceHeld.current = true }
+                if (event.key === ' ') event.preventDefault()
                 if (['+', '=', '-', '0'].includes(event.key)) {
                   event.preventDefault()
                   setView(current => event.key === '0' ? { zoom: 1, x: 0, y: 0 } : zoomView(current, event.key === '-' ? 100 : -100, { x: 0, y: 0 }))
@@ -858,6 +879,7 @@ function App() {
               onPointerDownCapture={event => {
                 if (!spaceHeld.current && event.button !== 1) return
                 event.preventDefault(); event.stopPropagation()
+                spacePanned.current = spaceHeld.current
                 panStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, viewX: view.x, viewY: view.y }
                 event.currentTarget.setPointerCapture(event.pointerId)
               }}

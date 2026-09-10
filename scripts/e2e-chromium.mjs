@@ -1790,6 +1790,7 @@ async function runNoopOutputInvalidationRegression({ cdp, fixturePath, selector,
 
 
 async function waitForFullOutput(cdp, sessionId) {
+  await waitForDom(cdp,sessionId,`document.querySelector('.status-chip')?.textContent !== '画像を読み込み中…'`, 'source adoption before opening compression')
   const mode = await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].findIndex(b=>b.getAttribute('aria-pressed')==='true')`)
   await setOutputPanel(cdp,sessionId,true)
   await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'full' && document.querySelector('.processed-preview')?.complete && !document.querySelector('.download-button')?.disabled`, 'current full output')
@@ -2199,6 +2200,33 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await setFileInput(cdp,sessionId,cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
   assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-surface').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1'`),'New source must start at 100 percent.')
+  // Space drag must work with focus on sibling UI, without editing or activating it on release.
+  for (const [compress,selector] of [[false,'.edit-modes button'],[false,'.change-image-button'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width']]) {
+    await setOutputPanel(cdp,sessionId,compress)
+    await evaluate(cdp,sessionId,`document.querySelector('${selector}').focus()`)
+    const before=await evaluate(cdp,sessionId,`(()=>{const e=document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}');return {x:e.getBoundingClientRect().x,crop:document.querySelector('.crop-rectangle').style.cssText,split:document.querySelector('#comparison-split').value,url:document.querySelector('.processed-preview').src}})()`)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+    // Releasing another key must not clear the still-held Space modifier.
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:625,y:310,button:'left',buttons:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:625,y:310,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+    await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan from '+selector)
+    assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(before.crop)} && document.querySelector('#comparison-split').value===${JSON.stringify(before.split)} && document.querySelector('.processed-preview').src===${JSON.stringify(before.url)} && document.querySelector('#output-panel').hidden===${!compress}`),'Space pan changed the edit, comparison or selected mode: '+selector)
+  }
+  await setOutputPanel(cdp,sessionId,false)
+  // A standalone Space still activates buttons; only a pan consumes its key release.
+  await evaluate(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[1].focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[1].getAttribute('aria-pressed')==='true'`,'Space activates a mode button without dragging')
+  await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks=0;document.querySelector('#image-input').addEventListener('click',event=>{event.preventDefault();window.__e2eImageChangeClicks++},{once:true});document.querySelector('.change-image-button').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===0`),'Image change must wait for Space release to allow panning.')
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===1`),'Standalone Space must still open image selection.')
+  await clickButton(cdp,sessionId,'クロップ')
   const outputBeforeZoom=await evaluate(cdp,sessionId,`document.querySelector('.processed-preview').src`)
   await zoomCanvas(cdp,sessionId,0.5)
   assert(await evaluate(cdp,sessionId,`Math.abs(document.querySelector('.crop-surface').getBoundingClientRect().width-500)<1 && document.querySelector('.processed-preview').src===${JSON.stringify(outputBeforeZoom)}`),'Wheel zoom must change only display scale.')
