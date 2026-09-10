@@ -7,6 +7,8 @@ import {
   constrainCrop,
   createEditState,
   resizeCropFromBottomRight,
+  resizeCropFromCorner,
+  type CropCorner,
   rotateEditState,
   straightenEditState,
   translateCrop,
@@ -651,4 +653,26 @@ describe('straightening', () => {
     expect(geometry.sourceCrop.y).toBeCloseTo(Math.min(...points.map(p => p.y)))
     expect(calculateImageGeometry(size, createEditState(size)).straightening).toEqual({ degrees: 0, scale: 1 })
   })
+})
+
+describe('four-corner resizing', () => {
+  for (const corner of ['top-left','top-right','bottom-left','bottom-right'] as CropCorner[]) {
+    it('preserves the opposite anchor and image bounds for ' + corner, () => {
+      const bounds = { width: 400, height: 400, imageSize: { width: 400, height: 200 }, angle: 45 }
+      const crop = constrainCrop({ x: 150, y: 150, width: 80, height: 60 }, bounds, 'free')
+      const sx = corner.endsWith('left') ? -1 : 1
+      const sy = corner.startsWith('top') ? -1 : 1
+      for (const preset of ['free','1:1'] as const) {
+        const start = constrainCrop(crop, bounds, preset)
+        const result = resizeCropFromCorner(start, { x: sx * 500, y: sy * 500 }, bounds, preset, corner)
+        expect(result.x + (sx < 0 ? result.width : 0)).toBeCloseTo(start.x + (sx < 0 ? start.width : 0))
+        expect(result.y + (sy < 0 ? result.height : 0)).toBeCloseTo(start.y + (sy < 0 ? start.height : 0))
+        expect(constrainCrop(result, bounds, 'free')).toEqual(expect.objectContaining({
+          x: expect.closeTo(result.x, 6), y: expect.closeTo(result.y, 6),
+          width: expect.closeTo(result.width, 6), height: expect.closeTo(result.height, 6),
+        }))
+        if (preset === '1:1') expect(result.width).toBeCloseTo(result.height)
+      }
+    })
+  }
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  createCropSurfaceStyle,
+  zoomView,
   placeCropHandle,
   createStageTransform,
 } from './stage'
@@ -24,26 +24,7 @@ describe('editor stage presentation helpers', () => {
     )
   })
 
-  it('returns the display aspect ratio with a responsive height-bound width', () => {
-    expect(createCropSurfaceStyle({ width: 16, height: 32 })).toEqual({
-      aspectRatio: '16 / 32',
-      maxWidth: 'min(100%, calc(100cqh * 0.5))',
-      marginInline: 'auto',
-    })
-  })
 
-  it.each([
-    [{ width: 0, height: 16 }],
-    [{ width: 16, height: 0 }],
-    [{ width: -1, height: 16 }],
-    [{ width: 16, height: -1 }],
-    [{ width: Number.NaN, height: 16 }],
-    [{ width: 16, height: Number.POSITIVE_INFINITY }],
-  ])('rejects invalid crop surface dimensions', (displaySize) => {
-    expect(() => createCropSurfaceStyle(displaySize)).toThrow(
-      'Crop surface dimensions must be positive numbers.',
-    )
-  })
 })
 
 describe('crop handle placement', () => {
@@ -67,4 +48,13 @@ describe('crop handle placement', () => {
     }
     expect(placeCropHandle({ x: 420, y: 580 }, { width: 800, height: 600 }, 44, [])).toEqual({ left: 376, top: 536 })
   })
+})
+
+it('keeps the pixel under the cursor stationary while zooming and clamps scale', () => {
+  const view = { zoom: 1, x: 30, y: -20 }, point = { x: 100, y: 80 }
+  const next = zoomView(view, -200, point)
+  expect((point.x-next.x)/next.zoom).toBeCloseTo((point.x-view.x)/view.zoom)
+  expect((point.y-next.y)/next.zoom).toBeCloseTo((point.y-view.y)/view.zoom)
+  expect(zoomView({ ...view, zoom: 16 }, -1000, point).zoom).toBe(16)
+  expect(zoomView({ ...view, zoom: 0.01 }, 1000, point).zoom).toBe(0.01)
 })

@@ -539,3 +539,23 @@ export function calculateImageGeometry(sourceSize: Size, state: ImageEditState):
     transformOrder: TRANSFORM_ORDER,
   }
 }
+
+export type CropCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
+/** Reflect other corners into the existing bottom-right resize, then reflect back. */
+export function resizeCropFromCorner(
+  crop: CropRect, delta: Pick<CropRect, 'x' | 'y'>, bounds: CropBounds,
+  preset: AspectRatioPreset, corner: CropCorner,
+): CropRect {
+  const sx = corner.endsWith('left') ? -1 : 1
+  const sy = corner.startsWith('top') ? -1 : 1
+  const reflect = (r: CropRect): CropRect => ({
+    ...r,
+    x: sx < 0 ? bounds.width - r.x - r.width : r.x,
+    y: sy < 0 ? bounds.height - r.y - r.height : r.y,
+  })
+  return reflect(resizeCropFromBottomRight(
+    reflect(crop), { x: delta.x * sx, y: delta.y * sy },
+    { ...bounds, angle: (bounds.angle ?? 0) * sx * sy }, preset,
+  ))
+}

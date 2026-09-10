@@ -1,11 +1,5 @@
 import type { ImageGeometry, Rotation, Size } from './geometry'
 
-export interface CropSurfaceStyle {
-  readonly aspectRatio: string
-  readonly maxWidth: string
-  readonly marginInline: 'auto'
-}
-
 /**
  * CSS transform functions apply from right to left. Rotation therefore has to
  * be the rightmost operation so the scale functions flip the final display
@@ -24,23 +18,6 @@ export function createStageTransform(
     ...(straightening.degrees === 0 ? [] : [`scale(${straightening.scale})`]),
     `rotate(${rotation + straightening.degrees}deg)`,
   ].join(' ')
-}
-
-export function createCropSurfaceStyle(displaySize: Size): CropSurfaceStyle {
-  if (
-    !Number.isFinite(displaySize.width) ||
-    displaySize.width <= 0 ||
-    !Number.isFinite(displaySize.height) ||
-    displaySize.height <= 0
-  ) {
-    throw new Error('Crop surface dimensions must be positive numbers.')
-  }
-
-  return {
-    aspectRatio: `${displaySize.width} / ${displaySize.height}`,
-    maxWidth: `min(100%, calc(100cqh * ${displaySize.width / displaySize.height}))`,
-    marginInline: 'auto',
-  }
 }
 
 /** Place the entire resize target at the nearest unoccluded viewport position. */
@@ -70,4 +47,13 @@ export function placeCropHandle(
   }
   // ponytail: if controls cover every 44px slot, keyboard resizing remains the fallback.
   return best ?? preferred
+}
+
+export interface ViewTransform { zoom: number; x: number; y: number }
+
+/** Zoom about a screen point relative to the viewport centre; never changes the image edit. */
+export function zoomView(view: ViewTransform, delta: number, point: { x: number; y: number }): ViewTransform {
+  const zoom = Math.max(0.01, Math.min(16, view.zoom * Math.exp(-Math.max(-1000, Math.min(1000, delta)) * 0.002)))
+  const ratio = zoom / view.zoom
+  return { zoom, x: point.x - (point.x - view.x) * ratio, y: point.y - (point.y - view.y) * ratio }
 }

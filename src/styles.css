@@ -972,8 +972,6 @@ input[type="range"] {
 body:has(.editor-shell) > .static-content { display: none; }
 html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { height: 100dvh; min-height: 0; overflow: hidden; }
 .editor-shell {
-  --view-switch-top: 4rem;
-  --view-switch-padding: 0.25rem;
   display: flex;
   flex-direction: column;
   height: 100dvh;
@@ -997,9 +995,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   overflow: hidden;
 }
 .editor-shell .editor-column { position: fixed; inset: 0; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
-.view-switch { position: absolute; z-index: 10; top: calc(var(--view-switch-top) + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; justify-content: center; gap: 0.25rem; padding: var(--view-switch-padding); border-radius: 0.75rem; background: var(--panel); }
-.view-switch button { min-width: 5rem; }
-.view-switch button, .edit-modes button {
+.edit-modes button {
   min-height: 2.75rem;
   padding: 0.4rem 1rem;
   border: 0;
@@ -1007,7 +1003,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   background: transparent;
   color: var(--muted);
 }
-.view-switch button[aria-pressed="true"], .edit-modes button[aria-pressed="true"] { color: var(--mint); background: #29261d; }
+.edit-modes button[aria-pressed="true"] { color: var(--mint); background: #29261d; }
 .editor-shell .stage-area {
   position: absolute;
   inset: 0;
@@ -1041,32 +1037,6 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   font-size: 0.75rem;
   font-weight: 400;
 }
-.output-menu {
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100% - 9rem - env(safe-area-inset-bottom));
-  right: max(1rem, env(safe-area-inset-right));
-  bottom: max(1rem, env(safe-area-inset-bottom));
-  z-index: 20;
-  border: 1px solid var(--line);
-  border-radius: 0.75rem;
-  background: var(--panel);
-  box-shadow: 0 8px 32px #0009;
-}
-.output-menu.is-open { width: min(20rem, calc(100vw - 2rem - env(safe-area-inset-right))); }
-.output-menu-header { flex: none; display: flex; align-items: center; justify-content: flex-end; }
-.output-menu.is-open .output-menu-header { padding: 0.5rem 0.5rem 0.5rem 1rem; }
-.output-toggle {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 3rem;
-  height: 3rem;
-  padding: 0;
-}
-.output-toggle svg { width: 1.5rem; height: 1.5rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.output-menu-title { margin: 0 auto 0 0; font-size: 1rem; }
 .editor-shell .settings-column {
   flex: 1;
   display: block;
@@ -1121,14 +1091,11 @@ input[type="number"], select { background-color: #101010; }
   .footer-inner { flex-direction: column; align-items: start; }
 }
 @media (max-height: 500px) {
-  .output-menu { max-height: calc(100% - 7rem - env(safe-area-inset-bottom)); }
-  .editor-shell { --view-switch-top: 3rem; --view-switch-padding: 0px; }
   .editor-bottom { padding-top: 0; }
   .edit-modes { margin: 0; }
   .edit-modes button { display: flex; align-items: center; }
   .transform-buttons { flex-wrap: wrap; gap: 0.15rem; }
   .transform-buttons button { min-height: 2.75rem; padding: 0.1rem 0.3rem; }
-  .editor-shell .crop-stage-meta { display: none; }
 }
 
 @media (max-height: 500px) {
@@ -1183,3 +1150,18 @@ body:has(.shell:not(.editor-shell)) > .static-content { flex: none; max-height: 
 
 .compression-result { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
 .compression-result .reduction-line { margin: 0; padding: 0; border: 0; }
+
+/* Display scale is independent of crop/encode dimensions. */
+.editor-shell .stage-area, .comparison-stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: clip; }
+.editor-shell .crop-surface, .editor-shell .comparison-viewport { max-width: none; max-height: none; margin: 0; flex: none; }
+.crop-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; user-select: none; }
+.crop-grid { z-index: 1; }
+.editor-shell .settings-column { max-height: min(45dvh, 24rem); padding: 0.5rem; }
+.editor-bottom { width: min(38rem, calc(100% - 1rem)); }
+.edit-modes { gap: 0.25rem; }
+.edit-modes button { flex: 1; min-width: 0; padding-inline: 0.5rem; }
+.editor-shell .crop-stage-meta.visually-hidden { position: absolute; padding: 0; min-height: 0; }
+
+.crop-handle[data-corner="top-right"], .crop-handle[data-corner="bottom-left"] { cursor: nesw-resize; }
+.editor-shell .crop-handle[data-corner^="top"]::after { top: 0; bottom: auto; }
+.editor-shell .crop-handle[data-corner$="left"]::after { left: 0; right: auto; }
