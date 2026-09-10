@@ -808,7 +808,13 @@ function App() {
 
   return (
     <>
-      <main className={asset ? 'shell editor-shell' : 'shell'}>
+      <main className={asset ? 'shell editor-shell' : 'shell'} onKeyDown={event => {
+        if (outputOpen && event.key === 'Escape') {
+          event.preventDefault()
+          setEditorMode('crop')
+          compressionTabRef.current?.focus()
+        }
+      }}>
           <input
             id="image-input"
             className="visually-hidden"
@@ -1011,7 +1017,7 @@ function App() {
             </div>
           </section>
           <div className="editor-bottom">
-            <aside id="output-panel" className="settings-column" aria-label="圧縮" hidden={!outputOpen} onKeyDown={event => { if (event.key === 'Escape') { setEditorMode('crop'); compressionTabRef.current?.focus() } }}>
+            <aside id="output-panel" className="settings-column" aria-label="圧縮" hidden={!outputOpen}>
                 <label className="visually-hidden" htmlFor="output-format">形式</label>
                 <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
                   {OUTPUT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}

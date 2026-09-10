@@ -29,7 +29,7 @@ File/drop
 | `src/App.tsx` | browser UI、File input/drop、編集 intent、下部ツールによる編集・圧縮切替、表示専用ズーム・パン、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
-| `src/image/stage.ts` | `createStageTransform` と crop surface style。CSS 表示文字列だけを組み立て、Canvas のピクセル処理は所有しない。 |
+| `src/image/stage.ts` | `createStageTransform` のCSS変換文字列、`zoomView` の表示倍率・位置の算術、`placeCropHandle` の操作領域配置を所有するpure seam。crop surface styleの組み立てとDOM測定は`App`、Canvasのピクセル処理は`raster`が所有する。 |
 | `src/image/raster.ts` | `RasterProcessor` の公開面は `process(source, editState, output)`、`clearSource()`、`dispose()`。decode、MIME/options 検証、source identity/cache、pending Promise と Worker messaging を所有する。 |
 | `src/image/worker-protocol.ts` | process/clear message の validation と `ProcessingPlan`。Worker の外から来る値を信頼せず、geometry と preview render size を組み合わせる。 |
 | `src/image/worker-scheduler.ts` | `enqueueLatest`、`completeLatest`、`clearLatest` の pure state machine。active は1件、queued は最新1件だけを表す。 |
@@ -121,7 +121,7 @@ Chromium E2E は CDP の HTTP/WebSocket 観測と static-server request log を�
 | evidence | proves |
 | --- | --- |
 | `src/image/geometry.test.ts` | display dimensions、final-display crop、aspect、zoom/pan、rotation、resize、flip の source mapping |
-| `src/image/stage.test.ts` | CSS transform の rotation/flip order と crop surface sizing |
+| `src/image/stage.test.ts` | CSS transform の rotation/flip order、表示ズームの固定点・倍率制限、ハンドルの画面内配置と障害物回避 |
 | `src/image/raster.test.ts` / `raster.processor.test.ts` | MIME/options、preview sizing、worker request validation、clear generation と pending lifecycle |
 | `src/image/worker-scheduler.test.ts` | one-active/one-latest、queue replacement、clear generation、stale event |
 | `src/image/encoded-metadata.test.ts` | JPEG APP/COM、PNG chunk、WebP chunk/RIFF の removal/retention と malformed input の fail-closed |

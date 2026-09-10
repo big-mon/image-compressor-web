@@ -1947,8 +1947,13 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await setOutputPanel(cdp,sessionId,true)
-  await evaluate(cdp,sessionId, `document.querySelector('#output-format').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
-  await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && document.activeElement === document.querySelector('[data-mode=compress]')`, 'Escape closes panel and restores focus')
+  for (const selector of ['[data-mode=compress]', '#comparison-split', '#output-format', '#resize-width', '.change-image-button']) {
+    await setOutputPanel(cdp,sessionId,true)
+    await evaluate(cdp,sessionId,`document.querySelector('${selector}').focus()`)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+    await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && !document.querySelector('.stage-area').hidden && document.activeElement === document.querySelector('[data-mode=compress]')`, 'Escape returns to crop from '+selector)
+  }
   await setOutputPanel(cdp,sessionId,true)
 
   // PNG oracle fixture with asymmetric colored cells (large enough for reduced preview).
@@ -2225,6 +2230,11 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)<${touchCorner.width}`,'touch corner resize')
   await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
   await waitForFullOutput(cdp,sessionId)
+  // Read the painted top edge, not just CSS: the ready preview must not cover the crop outline.
+  const edgeClip=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-rectangle').getBoundingClientRect();return {x:Math.floor(r.x+r.width/2),y:Math.ceil(r.y),width:2,height:2,scale:1}})()`)
+  const edgeShot=await cdp.send('Page.captureScreenshot',{format:'png',clip:edgeClip},sessionId)
+  const outlineVisible=await evaluate(cdp,sessionId,`(async()=>{const i=new Image();i.src='data:image/png;base64,${edgeShot.data}';await i.decode();const c=document.createElement('canvas');c.width=2;c.height=2;const x=c.getContext('2d');x.drawImage(i,0,0);const actual=[...x.getImageData(0,0,1,1).data];x.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--mint');x.fillRect(0,0,2,2);return actual.every((v,n)=>Math.abs(v-x.getImageData(0,0,1,1).data[n])<3)})()`)
+  assert(outlineVisible,'Ready preview obscures the crop outline.')
   await captureScreenshot(cdp,sessionId,'four-corner-preview.png')
   await setOutputPanel(cdp,sessionId,true)
 
