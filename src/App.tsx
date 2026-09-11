@@ -788,21 +788,59 @@ function App() {
       const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? editor.clientHeight : 1)
       setView(current => zoomView(current, delta, { x: event.clientX - editor.clientWidth / 2, y: event.clientY - editor.clientHeight / 2 }))
     }
-    const releaseSpace = (event: Event) => {
-      if (event.type === 'blur' || (event as KeyboardEvent).key === ' ') {
-        spaceHeld.current = false
-        spaceSelect.current = null
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.key === ' ') {
+        spaceHeld.current = true
+        if (!event.repeat) spacePanned.current = false
+        // Defer the native popup until release; preserve native selection without this API.
+        if (event.target instanceof HTMLSelectElement && typeof event.target.showPicker === 'function' && window.top === window) {
+          event.preventDefault()
+          spaceSelect.current = event.target
+        } else if (event.target === document.body || event.target === document.documentElement) {
+          event.preventDefault()
+        }
+      }
+      if (outputOpen && event.key === 'Escape') {
+        event.preventDefault()
+        setEditorMode('crop')
+        compressionTabRef.current?.focus()
       }
     }
+    const keyUp = (event: KeyboardEvent) => {
+      if (event.key !== ' ') return
+      spaceHeld.current = false
+      const select = spaceSelect.current
+      spaceSelect.current = null
+      if (spacePanned.current) {
+        event.preventDefault()
+        event.stopPropagation()
+      } else if (select && document.activeElement === select) {
+        event.preventDefault()
+        try { select.showPicker() } catch {
+          // Native arrow-key selection remains available if activation expired.
+        }
+      }
+    }
+    const releaseSpace = (event: Event) => {
+      if (event.type === 'blur') {
+        spaceHeld.current = false
+        panStart.current = null
+      }
+      if (event.type === 'blur' || event.target === spaceSelect.current) spaceSelect.current = null
+    }
     editor.addEventListener('wheel', wheel, { passive: false })
-    window.addEventListener('keyup', releaseSpace)
+    window.addEventListener('keydown', keyDown, true)
+    window.addEventListener('keyup', keyUp, true)
     window.addEventListener('blur', releaseSpace)
+    window.addEventListener('focusout', releaseSpace)
     return () => {
       editor.removeEventListener('wheel', wheel)
-      window.removeEventListener('keyup', releaseSpace)
+      window.removeEventListener('keydown', keyDown, true)
+      window.removeEventListener('keyup', keyUp, true)
       window.removeEventListener('blur', releaseSpace)
+      window.removeEventListener('focusout', releaseSpace)
     }
-  }, [asset])
+  }, [asset, outputOpen])
 
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
@@ -815,40 +853,7 @@ function App() {
 
   return (
     <>
-      <main className={asset ? 'shell editor-shell' : 'shell'} onKeyDownCapture={event => {
-        if (asset && event.key === ' ') {
-          spaceHeld.current = true
-          if (!event.repeat) spacePanned.current = false
-          // Defer the native popup until release, so Space can still start a pan.
-          // Keep native selection where deferred picker opening is unavailable.
-          if (event.target instanceof HTMLSelectElement && typeof event.target.showPicker === 'function' && window.top === window) {
-            event.preventDefault()
-            spaceSelect.current = event.target
-          }
-        }
-      }} onBlurCapture={event => {
-        if (event.target === spaceSelect.current) spaceSelect.current = null
-      }} onKeyUpCapture={event => {
-        if (event.key !== ' ') return
-        spaceHeld.current = false
-        const select = spaceSelect.current
-        spaceSelect.current = null
-        if (spacePanned.current) {
-          event.preventDefault()
-          event.stopPropagation()
-        } else if (select && document.activeElement === select) {
-          event.preventDefault()
-          try { select.showPicker() } catch {
-            // Native arrow-key selection remains available if activation expired.
-          }
-        }
-      }} onKeyDown={event => {
-        if (outputOpen && event.key === 'Escape') {
-          event.preventDefault()
-          setEditorMode('crop')
-          compressionTabRef.current?.focus()
-        }
-      }}>
+      <main className={asset ? 'shell editor-shell' : 'shell'}>
           <input
             id="image-input"
             className="visually-hidden"

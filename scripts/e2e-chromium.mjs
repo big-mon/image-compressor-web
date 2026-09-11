@@ -1950,9 +1950,9 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await setOutputPanel(cdp,sessionId,true)
-  for (const selector of ['[data-mode=compress]', '#comparison-split', '#output-format', '#resize-width', '.change-image-button']) {
+  for (const selector of [null, '[data-mode=compress]', '#comparison-split', '#output-format', '#resize-width', '.change-image-button']) {
     await setOutputPanel(cdp,sessionId,true)
-    await evaluate(cdp,sessionId,`document.querySelector('${selector}').focus()`)
+    await evaluate(cdp,sessionId,selector ? `document.querySelector('${selector}').focus()` : `document.activeElement.blur()`)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
     await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && !document.querySelector('.stage-area').hidden && document.activeElement === document.querySelector('[data-mode=compress]')`, 'Escape returns to crop from '+selector)
@@ -2197,15 +2197,17 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await runPreDebounceInvalidReplacementRegression({cdp,sessionId,fixturePath,invalidFixturePath:unsupportedFixturePath,invalidLabel:'unsupported',pendingFixturePath:cropDragFixturePath})
   await removeE2EGates(cdp,sessionId)
 
-  // Native wheel zoom changes only the canvas, and every corner fixes its opposite anchor.
+  // Start with an actual drop while no editor control owns focus.
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
-  await setFileInput(cdp,sessionId,cropDragFixturePath)
+  await evaluate(cdp,sessionId,`document.activeElement.blur()`)
+  await dispatchFileDrop(cdp,sessionId,'.change-image-button',cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
   assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-surface').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1'`),'New source must start at 100 percent.')
   // Space drag must work with focus on sibling UI, without editing or activating it on release.
-  for (const [compress,selector] of [[false,'.edit-modes button'],[false,'.change-image-button'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
+  for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
     await setOutputPanel(cdp,sessionId,compress)
-    await evaluate(cdp,sessionId,`document.querySelector('${selector}').focus()`)
+    await evaluate(cdp,sessionId,selector ? `document.querySelector('${selector}').focus()` : `document.activeElement.blur()`)
+    if (!selector) assert(await evaluate(cdp,sessionId,`document.activeElement===document.body`),'No-focus case must really target the document body.')
     const before=await evaluate(cdp,sessionId,`(()=>{const e=document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}');return {x:e.getBoundingClientRect().x,crop:document.querySelector('.crop-rectangle').style.cssText,split:document.querySelector('#comparison-split').value,url:document.querySelector('.processed-preview').src}})()`)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
     assert(await evaluate(cdp,sessionId,`!document.querySelector('#output-format').matches(':open')`),'Space press opened the format popup before dragging.')
@@ -2218,9 +2220,26 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan from '+selector)
     assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(before.crop)} && document.querySelector('#comparison-split').value===${JSON.stringify(before.split)} && document.querySelector('.processed-preview').src===${JSON.stringify(before.url)} && document.querySelector('#output-panel').hidden===${!compress}`),'Space pan changed the edit, comparison or selected mode: '+selector)
   }
+  // Losing window focus must end a pan even if pointerup/key up happen after returning.
+  await evaluate(cdp,sessionId,`document.activeElement.blur()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:610,y:310,button:'left',buttons:1},sessionId)
+  await evaluate(cdp,sessionId,`window.dispatchEvent(new Event('blur'));new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
+  const blurredView=await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').style.transform`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:630,y:310,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:630,y:310,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').style.transform===${JSON.stringify(blurredView)}`),'Window blur must cancel the active pan.')
+  const splitAfterBlur=await evaluate(cdp,sessionId,`document.querySelector('#comparison-split').value`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:680,y:300,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:680,y:300,button:'left',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').style.transform===${JSON.stringify(blurredView)} && document.querySelector('#comparison-split').value!==${JSON.stringify(splitAfterBlur)}`),'A normal drag after blur must adjust comparison, not continue panning.')
   await setOutputPanel(cdp,sessionId,false)
   await setOutputPanel(cdp,sessionId,true)
   await evaluate(cdp,sessionId,`document.querySelector('#output-format').focus()`)
+
   await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
   assert(await evaluate(cdp,sessionId,`!document.querySelector('#output-format').matches(':open')`),'Standalone select Space must wait for release.')
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
