@@ -1228,20 +1228,9 @@ async function resizeCropByPointer(cdp, sessionId, width, height) {
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:drag.x,y:drag.y,button:'left',clickCount:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:drag.toX,y:drag.toY,button:'left',buttons:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:drag.toX,y:drag.toY,button:'left',clickCount:1},sessionId)
+  // Let continuous pointer events render before the next gesture or mode change.
+  await evaluate(cdp,sessionId,`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
   await setOutputPanel(cdp,sessionId,panelOpen)
-}
-
-async function assertUnobstructedCropResize(cdp, sessionId) {
-  const target = await evaluate(cdp,sessionId,`(() => {
-    const h=document.querySelector('.crop-handle'),r=h.getBoundingClientRect()
-    const controls=[...document.querySelectorAll('.image-actions,.view-switch,.output-menu,.editor-bottom')].map(e=>e.getBoundingClientRect()).filter(b=>b.width&&b.height)
-    return {x:r.x+r.width/2,y:r.y+r.height/2,width:parseFloat(document.querySelector('.crop-rectangle').style.width),clear:controls.every(b=>r.right<=b.left||r.left>=b.right||r.bottom<=b.top||r.top>=b.bottom),hit:h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}
-  })()`)
-  assert(target.clear && target.hit, 'Resize target overlaps a floating control: '+JSON.stringify(target))
-  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:target.x,y:target.y,button:'left',clickCount:1},sessionId)
-  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:target.x-4,y:target.y-4,button:'left',buttons:1},sessionId)
-  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:target.x-4,y:target.y-4,button:'left',clickCount:1},sessionId)
-  await waitForDom(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)<${target.width} && !document.querySelector('#output-panel').hidden`, 'pointer resize with compression still open')
 }
 
 async function setControlValue(cdp, sessionId, selector, value) {
@@ -1803,77 +1792,60 @@ async function runNoopOutputInvalidationRegression({ cdp, fixturePath, selector,
 
 
 async function waitForFullOutput(cdp, sessionId) {
+  await waitForDom(cdp,sessionId,`document.querySelector('.status-chip')?.textContent !== '画像を読み込み中…'`, 'source adoption before opening compression')
+  const mode = await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].findIndex(b=>b.getAttribute('aria-pressed')==='true')`)
+  await setOutputPanel(cdp,sessionId,true)
   await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'full' && document.querySelector('.processed-preview')?.complete && !document.querySelector('.download-button')?.disabled`, 'current full output')
+  if(mode !== 2) await evaluate(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[${mode}].click()`)
+  await evaluate(cdp,sessionId,`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
 }
 
 async function selectEditorView(cdp, sessionId, view) {
-  await evaluate(cdp, sessionId, `document.querySelectorAll('.view-switch button')[${view === 'edit' ? 0 : 1}].click()`)
-  await waitForDom(cdp, sessionId, `document.querySelector('.${view === 'edit' ? 'stage-area' : 'comparison-section'}')?.hidden === false`, `${view} view`)
+  await setOutputPanel(cdp,sessionId,view==='compare')
 }
 
 async function setOutputPanel(cdp, sessionId, open) {
-  if (await evaluate(cdp, sessionId, `document.querySelector('.output-toggle')?.getAttribute('aria-expanded') !== '${open}'`)) {
-    const toggle = await evaluate(cdp, sessionId, `(()=>{const r=document.querySelector('.output-toggle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
-    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...toggle,button:'left',clickCount:1},sessionId)
-    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...toggle,button:'left',clickCount:1},sessionId)
+  if (await evaluate(cdp,sessionId,`document.querySelector('#output-panel').hidden === ${open}`)) {
+    await evaluate(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[${open?2:0}].click()`)
   }
-  await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === ${!open}`, 'output panel state')
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-toggle').getAttribute('aria-label') === '${open ? '圧縮を最小化' : '圧縮を展開'}'`),'Panel toggle must describe its current action.')
+  await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === ${!open}`, 'compression mode')
+}
+
+async function zoomCanvas(cdp, sessionId, target) {
+  let current=await evaluate(cdp,sessionId,`Number(document.querySelector('.editor-column').dataset.viewZoom)`)
+  while(Math.abs(current-target)>0.001) {
+    const point=await evaluate(cdp,sessionId,`({x:innerWidth/2,y:innerHeight/2})`)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseWheel',...point,deltaX:0,deltaY:Math.max(-1000,Math.min(1000,-Math.log(target/current)/0.002))},sessionId)
+    await waitForDom(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-${current})>0.00001`,'wheel zoom')
+    current=await evaluate(cdp,sessionId,`Number(document.querySelector('.editor-column').dataset.viewZoom)`)
+  }
 }
 
 async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   await setViewport(cdp, sessionId, viewport)
-  await setOutputPanel(cdp, sessionId, false)
-  const closedEditor = await evaluate(cdp,sessionId,`document.querySelector('.editor-column').getBoundingClientRect().toJSON()`)
   await setOutputPanel(cdp, sessionId, panelOpen)
-  await selectEditorView(cdp, sessionId, 'edit')
-  const layout = await evaluate(cdp, sessionId, `(() => {
-    const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height, right:r.right, bottom:r.bottom } }
-    return { root:rect('#root'), body:rect('body'), html:rect('html'), shell:rect('.editor-shell'), stage:rect('.stage-area'), surface:rect('.crop-surface'), bottom:rect('.editor-bottom'), panel:rect('#output-panel'), editor:rect('.editor-column'), header:rect('.image-actions'),
-      scrollHeight:document.documentElement.scrollHeight, scrollWidth:document.documentElement.scrollWidth,
-      fullscreen:document.fullscreenElement !== null, headings:document.querySelectorAll('.workspace h2:not(.output-menu-title)').length,
-      footer:document.querySelector('footer') !== null,
-      viewSwitch:rect('.view-switch'), menu:rect('.output-menu'), menuHeader:rect('.output-menu-header'), toggle:rect('.output-toggle'), menuPosition:getComputedStyle(document.querySelector('.output-menu')).position,
-      headerToggle:document.querySelector('.image-actions .output-toggle') !== null,
-      panelOnTop:(()=>{const p=document.querySelector('#output-panel'),r=p.getBoundingClientRect();return p.contains(document.elementFromPoint(r.x+r.width/2,r.y+20))})(),
-      controlsOnTop:[...document.querySelectorAll('.image-actions button,.change-image-button,.edit-modes button,.view-switch button,.output-toggle')].every(b=>{const r=b.getBoundingClientRect();return b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}),
-      buttons:[...document.querySelectorAll('.image-actions button,.edit-modes button,.output-toggle')].map(b=>({height:b.getBoundingClientRect().height,width:b.getBoundingClientRect().width})),
-    }
+  const layout=await evaluate(cdp,sessionId,`(()=>{
+    const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON()
+    const controls=[...document.querySelectorAll('.image-actions button,.change-image-button,.edit-modes button')]
+    return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),
+      scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
+      controls:controls.map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}}),
+      cropHidden:document.querySelector('.stage-area').hidden,compareHidden:document.querySelector('.comparison-section').hidden,
+      obsolete:!!document.querySelector('.view-switch,.output-menu,header,footer'),
+      handles:[...document.querySelectorAll('.crop-handle')].map(h=>{const r=h.getBoundingClientRect();return h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})}
   })()`)
-  const inside = r => r.x >= -1 && r.y >= -1 && r.right <= viewport.width + 1 && r.bottom <= viewport.height + 1
-  assert(layout.shell.height === viewport.height && !layout.fullscreen, `Editor must own the website viewport: ${JSON.stringify(layout)}`)
-  assert(layout.scrollWidth <= viewport.width && layout.scrollHeight <= viewport.height + 1, `Editor overflow: ${JSON.stringify(layout)}`)
-  assert(await evaluate(cdp,sessionId,`!document.querySelector('.editor-shell header')`), 'Editor must not have a header.')
-  assert(Math.abs(layout.bottom.x+layout.bottom.width/2-viewport.width/2)<1, 'Bottom tools must be horizontally centred.')
-  assert(!layout.footer && layout.headings === 0, 'Retired headings or footer remain in the editor.')
-  assert(inside(layout.header) && inside(layout.bottom) && inside(layout.stage), `Primary controls escaped viewport: ${JSON.stringify(layout)}`)
-  assert(layout.surface.width > 0 && layout.surface.height >= 80 && inside(layout.surface), `Image does not fit: ${JSON.stringify(layout)}`)
-  assert(layout.stage.x===0 && layout.stage.y===0 && layout.stage.width===viewport.width && layout.stage.height===viewport.height, 'Image stage must fill the viewport behind the UI.')
-  assert(Math.abs(layout.surface.width-viewport.width)<1 || Math.abs(layout.surface.height-viewport.height)<1, 'Fitted image must use the entire viewport on one axis.')
-  assert(layout.controlsOnTop, 'Floating controls must receive input above the full-viewport image.');
-  assert(layout.buttons.every(b => b.height >= 44 && b.width >= 44), 'Primary buttons must have 44px tap targets.')
-  assert(!layout.headerToggle && layout.menuPosition==='absolute' && inside(layout.toggle), 'Output menu must overlay the image workspace.')
-  assert(viewport.width-layout.menu.right <= 17 && layout.bottom.y-layout.menu.bottom <= 25,'Menu is not at the bottom right of the image workspace.')
-  assert(layout.toggle.x >= layout.menuHeader.x && layout.toggle.right <= layout.menuHeader.right && layout.toggle.y >= layout.menuHeader.y && layout.toggle.bottom <= layout.menuHeader.bottom,'Toggle must be inside the menu header.')
-  assert(layout.menu.bottom <= layout.bottom.y, 'Compression menu overlaps the bottom editing controls.')
-  assert(layout.editor.width===closedEditor.width && layout.editor.height===closedEditor.height,'Opening settings resized the image area.')
-  if (panelOpen) {
-    assert(layout.menu.y >= layout.viewSwitch.bottom, 'Compression menu must not cover the edit/compare switch or save button.')
-    assert(inside(layout.panel) && layout.panel.height > 0 && layout.panelOnTop, 'Output panel must be visible above the image.')
-    assert(layout.panel.x < layout.editor.right && layout.panel.y < layout.editor.bottom, 'Output panel must overlap the editor.')
-    assert(layout.toggle.bottom <= layout.panel.y && layout.menu.right-layout.toggle.right <= 10, 'Toggle must be at the top right of the menu.')
-    const scroll = await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel');p.querySelector('#resize-height').scrollIntoView({block:'nearest'});const r=p.querySelector('#resize-height').getBoundingClientRect(),b=p.getBoundingClientRect();const t=document.querySelector('.output-toggle'),tr=t.getBoundingClientRect();const visible=r.top>=b.top-1&&r.bottom<=b.bottom+1&&t.contains(document.elementFromPoint(tr.x+tr.width/2,tr.y+tr.height/2));const result={visible,input:r.toJSON(),panel:b.toJSON(),toggle:tr.toJSON(),scroll:p.scrollTop};p.scrollTop=0;return result})()`)
-    assert(scroll.visible,'Output settings at the bottom are not reachable: '+JSON.stringify({viewport,...scroll}))
-    const saveLayout=await evaluate(cdp,sessionId,`(()=>{const b=document.querySelector('.download-button');b.scrollIntoView({block:'nearest'});const r=b.getBoundingClientRect(),m=document.querySelector('.reduction-line').getBoundingClientRect(),p=document.querySelector('#output-panel').getBoundingClientRect();return {adjacent:m.right<=r.left&&m.top<r.bottom&&m.bottom>r.top,visible:r.top>=p.top-1&&r.bottom<=p.bottom+1&&b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
-    assert(saveLayout.adjacent&&saveLayout.visible,'Save must be beside reduction and reachable in the compression panel.')
+  assert(layout.shell.height===viewport.height && layout.editor.width===viewport.width && layout.editor.height===viewport.height,'Canvas must fill viewport.')
+  assert(layout.scrollWidth<=viewport.width && layout.scrollHeight<=viewport.height+1,'Editor must not scroll: '+JSON.stringify(layout))
+  assert(!layout.obsolete && layout.cropHidden===panelOpen && layout.compareHidden!==panelOpen,'Compression must select comparison without separate modes.')
+  assert(Math.abs(layout.bottom.x+layout.bottom.width/2-viewport.width/2)<1 && layout.bottom.y>=0 && layout.bottom.bottom<=viewport.height,'Bottom menu must stay centred and within viewport.')
+  assert(layout.controls.every(b=>b.width>=44&&b.height>=44&&b.hit),'Overlay buttons must remain reachable: '+JSON.stringify(layout))
+  if(!panelOpen) assert(layout.handles.length===4 && layout.handles.every(Boolean),'All four handles must remain reachable: '+JSON.stringify(layout))
+  if(panelOpen) {
+    for(const selector of ['#output-format','#resize-height','.download-button']) {
+      assert(await evaluate(cdp,sessionId,`(()=>{const b=document.querySelector('${selector}');b.scrollIntoView({block:'nearest'});const r=b.getBoundingClientRect();return b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`),'Compression control unreachable: '+selector)
+    }
+    assert(await evaluate(cdp,sessionId,`(()=>{const b=document.querySelector('.download-button').getBoundingClientRect(),r=document.querySelector('.reduction-line').getBoundingClientRect();return r.right<=b.left&&r.top<b.bottom&&r.bottom>b.top})()`),'Save must remain beside reduction.')
     await evaluate(cdp,sessionId,`document.querySelector('#output-panel').scrollTop=0`)
-
-  }
-  for (const mode of ['傾き・反転','クロップ']) {
-    const point = await evaluate(cdp,sessionId,`(()=>{const b=[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')),r=b.getBoundingClientRect();return {x:r.right-4,y:r.bottom-8}})()`)
-    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
-    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
-    assert(await evaluate(cdp,sessionId,`[...document.querySelectorAll('.edit-modes button')].find(b=>b.textContent.includes('${mode}')).getAttribute('aria-pressed')==='true' && document.querySelector('#output-panel').hidden===${!panelOpen}`),'Floating toggle intercepted the edit-mode button: '+mode)
   }
   return layout
 }
@@ -1949,10 +1921,11 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.output-toggle')?.getAttribute('aria-expanded') === 'true' && document.querySelector('#output-panel')?.hidden === false`, 'initial expanded output panel after image decode')
+  await waitForDom(cdp, sessionId, `document.querySelector('.editor-column')?.dataset.viewZoom === '1' && document.querySelector('#output-panel')?.hidden === true`, 'initial crop mode at 100 percent')
+  await setOutputPanel(cdp,sessionId,true)
   await waitForFullOutput(cdp, sessionId)
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.output-menu-title').textContent==='圧縮' && !document.querySelector('#output-panel details,#output-panel summary,.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must show controls without accordion sections.')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('[data-mode=compress]').textContent==='圧縮' && !document.querySelector('#output-panel details,#output-panel summary,.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must show controls without accordion sections.')
   assert(await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),f=p.querySelector('#output-format'),l=p.querySelector('label[for="quality"]'),r=p.querySelector('#quality'),w=p.querySelector('#resize-width'),h=p.querySelector('#resize-height');return f&&l&&r&&w&&h&&[f,r,w,h].every(e=>e.checkVisibility())&&f.getBoundingClientRect().bottom<=l.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=w.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=h.getBoundingClientRect().top&&parseFloat(getComputedStyle(r.parentElement).rowGap)<=3})()`),'Format, quality, width and height must initially be visible in order with a compact label-to-slider gap.')
   await captureScreenshot(cdp,sessionId,'compression-initial.png')
   const requestCount = await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.requests.length')
@@ -1967,7 +1940,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDownloadedFile(downloadDirectory, 'e2e-metadata-fixture-edited.jpg')
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).filter(r => !r.preview).length === 1`), 'Saving after reopening compression must encode exactly once.')
   assert(await evaluate(cdp, sessionId, `document.querySelector('.stage-image').naturalWidth === 16 && document.querySelector('.stage-image').naturalHeight === 32`), 'EXIF orientation was not normalized.')
-  assert(await evaluate(cdp, sessionId, `document.querySelector('.output-toggle').getAttribute('aria-expanded') === 'true'`), 'Saving must keep compression visible.')
+  assert(await evaluate(cdp, sessionId, `!document.querySelector('#output-panel').hidden`), 'Saving must keep compression visible.')
   const layouts = []
   for (const viewport of [...TABLET_VIEWPORTS,DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
     for(const open of [false,true]) {
@@ -1977,8 +1950,13 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await setOutputPanel(cdp,sessionId,true)
-  await evaluate(cdp,sessionId, `document.querySelector('#output-format').focus(); document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
-  await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && document.activeElement === document.querySelector('.output-toggle')`, 'Escape closes panel and restores focus')
+  for (const selector of [null, '[data-mode=compress]', '#comparison-split', '#output-format', '#resize-width', '.change-image-button']) {
+    await setOutputPanel(cdp,sessionId,true)
+    await evaluate(cdp,sessionId,selector ? `document.querySelector('${selector}').focus()` : `document.activeElement.blur()`)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+    await waitForDom(cdp,sessionId,`document.querySelector('#output-panel').hidden && !document.querySelector('.stage-area').hidden && document.activeElement === document.querySelector('[data-mode=compress]')`, 'Escape returns to crop from '+selector)
+  }
   await setOutputPanel(cdp,sessionId,true)
 
   // PNG oracle fixture with asymmetric colored cells (large enough for reduced preview).
@@ -2012,6 +1990,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await captureScreenshot(cdp,sessionId,`icon-controls-${viewport.width}.png`)
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await zoomCanvas(cdp,sessionId,0.5)
   await clickButton(cdp,sessionId,'クロップ')
   assert(await evaluate(cdp,sessionId,`document.querySelector('select#aspect-ratio')===null && document.querySelectorAll('.aspect-preset').length===9`),'Aspect ratios must be preset buttons.')
   await waitForDom(cdp,sessionId,`document.querySelector('.crop-controls').hidden===false`, 'crop preset controls visible')
@@ -2083,7 +2062,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForFullOutput(cdp,sessionId)
 
   const beforeResize=await evaluate(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)`)
-  const handle=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-handle').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  const handle=await evaluate(cdp,sessionId,`(()=>{const h=document.querySelector('.crop-handle'),r=h.getBoundingClientRect();if(!h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))throw new Error('Handle covered '+JSON.stringify(r.toJSON()));return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...handle,button:'left',clickCount:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:handle.x-10,y:handle.y-10,button:'left',buttons:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:handle.x-10,y:handle.y-10,button:'left',clickCount:1},sessionId)
@@ -2116,12 +2095,18 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39},sessionId)
   await waitForDom(cdp,sessionId,`document.querySelector('#comparison-split').value==='36'`,'keyboard comparison boundary')
   await captureScreenshot(cdp,sessionId,'editor-comparison.png')
-  await setOutputPanel(cdp,sessionId,false)
+  await setOutputPanel(cdp,sessionId,true)
+  await zoomCanvas(cdp,sessionId,0.5)
   for(const viewport of [MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375}]) {
     await setViewport(cdp,sessionId,viewport)
+    if(viewport.height<500) {
+      await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:30,y:120,button:'middle',clickCount:1},sessionId)
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:30,y:40,button:'middle',buttons:4},sessionId)
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:30,y:40,button:'middle',clickCount:1},sessionId)
+    }
     const fit=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.comparison-viewport').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom,right:r.right}})()`)
     assert(await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.comparison-stage').getBoundingClientRect();return r.x===0&&r.y===0&&r.width===innerWidth&&r.height===innerHeight})()`), 'Comparison stage must fill the viewport behind the UI.')
-    assert(fit.width>0 && fit.height>=60 && fit.bottom<=viewport.height && fit.right<=viewport.width, 'Comparison image must fit small windows: '+JSON.stringify(fit))
+    assert(fit.width>0 && fit.height>0 && fit.bottom<=viewport.height && fit.right<=viewport.width, 'Comparison image must fit small windows: '+JSON.stringify(fit))
     await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
     const touch = {x:fit.x+fit.width*0.25,y:fit.y+fit.height/2}
     await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch]},sessionId)
@@ -2212,53 +2197,142 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await runPreDebounceInvalidReplacementRegression({cdp,sessionId,fixturePath,invalidFixturePath:unsupportedFixturePath,invalidLabel:'unsupported',pendingFixturePath:cropDragFixturePath})
   await removeE2EGates(cdp,sessionId)
 
-  // Tall images and crops behind compression must retain pointer resizing.
-  const portraitData=await evaluate(cdp,sessionId,`(()=>{const c=document.createElement('canvas');c.width=100;c.height=1000;const x=c.getContext('2d');x.fillStyle='orange';x.fillRect(0,0,100,1000);return c.toDataURL().split(',')[1]})()`)
-  const portraitPath=join(dirname(cropDragFixturePath),'portrait-handle.png')
-  await writeFile(portraitPath,Buffer.from(portraitData,'base64'))
-  await setViewport(cdp,sessionId,{...MOBILE_VIEWPORT,width:820,height:1180})
-  await setFileInput(cdp,sessionId,portraitPath)
-  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image').naturalWidth===100 && document.querySelector('.stage-image').naturalHeight===1000`, 'portrait image for handle overlap')
-  await waitForFullOutput(cdp,sessionId)
-  await setOutputPanel(cdp,sessionId,true)
-  assert(await evaluate(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').getBoundingClientRect(),b=document.querySelector('.editor-bottom').getBoundingClientRect();return c.right-22>b.left&&c.right-22<b.right&&c.bottom-22>b.top})()`),'Portrait fixture must place its crop corner under the bottom panel.')
-  await assertUnobstructedCropResize(cdp,sessionId)
+  // Start with an actual drop while no editor control owns focus.
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
-  await setFileInput(cdp,sessionId,cropDragFixturePath)
-  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image').naturalWidth===1000`, 'landscape source for compression overlap')
+  await evaluate(cdp,sessionId,`document.activeElement.blur()`)
+  await dispatchFileDrop(cdp,sessionId,'.change-image-button',cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
-  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
-  await resizeCropByPointer(cdp,sessionId,10,10)
-  const move=await evaluate(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').getBoundingClientRect(),p=document.querySelector('.output-menu').getBoundingClientRect();return {x:c.x+8,y:c.y+8,toX:p.x+p.width/2-c.width+8,toY:p.y+p.height/2-c.height+8}})()`)
-  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:move.x,y:move.y,button:'left',clickCount:1},sessionId)
-  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:move.toX,y:move.toY,button:'left',buttons:1},sessionId)
-  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:move.toX,y:move.toY,button:'left',clickCount:1},sessionId)
-  await waitForDom(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').getBoundingClientRect(),p=document.querySelector('.output-menu').getBoundingClientRect();return c.right>p.left&&c.right<p.right&&c.bottom>p.top&&c.bottom<p.bottom})()`, 'crop corner beneath compression')
-  await assertUnobstructedCropResize(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-surface').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1'`),'New source must start at 100 percent.')
+  // Space drag must work with focus on sibling UI, without editing or activating it on release.
+  for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
+    await setOutputPanel(cdp,sessionId,compress)
+    await evaluate(cdp,sessionId,selector ? `document.querySelector('${selector}').focus()` : `document.activeElement.blur()`)
+    if (!selector) assert(await evaluate(cdp,sessionId,`document.activeElement===document.body`),'No-focus case must really target the document body.')
+    const before=await evaluate(cdp,sessionId,`(()=>{const e=document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}');return {x:e.getBoundingClientRect().x,crop:document.querySelector('.crop-rectangle').style.cssText,split:document.querySelector('#comparison-split').value,url:document.querySelector('.processed-preview').src}})()`)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+    assert(await evaluate(cdp,sessionId,`!document.querySelector('#output-format').matches(':open')`),'Space press opened the format popup before dragging.')
+    // Releasing another key must not clear the still-held Space modifier.
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:625,y:310,button:'left',buttons:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:625,y:310,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+    await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan from '+selector)
+    assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(before.crop)} && document.querySelector('#comparison-split').value===${JSON.stringify(before.split)} && document.querySelector('.processed-preview').src===${JSON.stringify(before.url)} && document.querySelector('#output-panel').hidden===${!compress}`),'Space pan changed the edit, comparison or selected mode: '+selector)
+  }
+  // Losing window focus must end a pan even if pointerup/key up happen after returning.
+  await evaluate(cdp,sessionId,`document.activeElement.blur()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:610,y:310,button:'left',buttons:1},sessionId)
+  await evaluate(cdp,sessionId,`window.dispatchEvent(new Event('blur'));new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
+  const blurredView=await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').style.transform`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:630,y:310,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:630,y:310,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').style.transform===${JSON.stringify(blurredView)}`),'Window blur must cancel the active pan.')
+  const splitAfterBlur=await evaluate(cdp,sessionId,`document.querySelector('#comparison-split').value`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:680,y:300,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:680,y:300,button:'left',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').style.transform===${JSON.stringify(blurredView)} && document.querySelector('#comparison-split').value!==${JSON.stringify(splitAfterBlur)}`),'A normal drag after blur must adjust comparison, not continue panning.')
+  await setOutputPanel(cdp,sessionId,false)
+  await setOutputPanel(cdp,sessionId,true)
+  await evaluate(cdp,sessionId,`document.querySelector('#output-format').focus()`)
 
-  // A small top-centre crop must stay resizable clear of the edit/compare switch.
-  const beforeTopCropSource = await evaluate(cdp,sessionId,`document.querySelector('.stage-image').src`)
-  await setFileInput(cdp,sessionId,cropDragFixturePath)
-  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image').src!==${JSON.stringify(beforeTopCropSource)} && document.querySelector('.stage-image').naturalWidth===1000`, 'fresh source for top-centre resize regression')
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+  assert(await evaluate(cdp,sessionId,`!document.querySelector('#output-format').matches(':open')`),'Standalone select Space must wait for release.')
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector('#output-format').matches(':open')`,'Space release opens the actual native select popup')
+  // Close the popup before testing native type-ahead (headless macOS may dismiss it itself).
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await waitForDom(cdp,sessionId,`!document.querySelector('#output-format').matches(':open')`,'native popup dismissal')
+  await setOutputPanel(cdp,sessionId,true)
+  await evaluate(cdp,sessionId,`document.querySelector('#output-format').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'p',code:'KeyP',windowsVirtualKeyCode:80,text:'p',unmodifiedText:'p'},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'p',code:'KeyP',windowsVirtualKeyCode:80},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector('#output-format').value==='image/png'`,'native keyboard format selection')
+  // Browsers without showPicker keep the native Space-key picker rather than losing selection.
+  await evaluate(cdp,sessionId,`window.__e2eShowPicker=HTMLSelectElement.prototype.showPicker;HTMLSelectElement.prototype.showPicker=undefined;window.addEventListener('keydown',event=>{window.__e2eSpacePrevented=event.defaultPrevented},{once:true});document.querySelector('#output-format').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+  assert(await evaluate(cdp,sessionId,`window.__e2eSpacePrevented===false`),'Unavailable picker API must not suppress native Space selection.')
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await waitForDom(cdp,sessionId,`!document.querySelector('#output-format').matches(':open')`,'native fallback popup closes')
+  await setOutputPanel(cdp,sessionId,true)
+  await evaluate(cdp,sessionId,`document.querySelector('#output-format').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'w',code:'KeyW',windowsVirtualKeyCode:87,text:'w',unmodifiedText:'w'},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'w',code:'KeyW',windowsVirtualKeyCode:87},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector('#output-format').value==='image/webp'`,'native keyboard selection without picker API')
+
+  await evaluate(cdp,sessionId,`HTMLSelectElement.prototype.showPicker=window.__e2eShowPicker;delete window.__e2eShowPicker`)
+
+  await setControlValue(cdp,sessionId,'#output-format','image/jpeg')
   await waitForFullOutput(cdp,sessionId)
   await setOutputPanel(cdp,sessionId,false)
-  await evaluate(cdp,sessionId,`document.querySelector('[data-aspect-ratio="free"]').click()`)
-  await resizeCropByPointer(cdp,sessionId,3,3)
-  await waitForDom(cdp,sessionId,`Math.abs(parseFloat(document.querySelector('.crop-rectangle').style.width)-3)<0.01`, 'small crop for top-centre resize regression')
-  await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').focus()`)
-  // Dispatch separately across renders so each move observes the current crop.
-  for (let i=0;i<50;i++) {
-    await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',shiftKey:true,bubbles:true}))`)
+  // A standalone Space still activates buttons; only a pan consumes its key release.
+  await evaluate(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[1].focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[1].getAttribute('aria-pressed')==='true'`,'Space activates a mode button without dragging')
+  await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks=0;document.querySelector('#image-input').addEventListener('click',event=>{event.preventDefault();window.__e2eImageChangeClicks++},{once:true});document.querySelector('.change-image-button').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+  assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===0`),'Image change must wait for Space release to allow panning.')
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
+  assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===1`),'Standalone Space must still open image selection.')
+  await clickButton(cdp,sessionId,'クロップ')
+  await zoomCanvas(cdp,sessionId,2)
+  await evaluate(cdp,sessionId,`document.querySelector('.image-actions button').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.stage-area').matches(':focus-visible')`),'Tab must visibly focus the zoom stage.')
+  const focusShot=await cdp.send('Page.captureScreenshot',{format:'png',clip:{x:2,y:450,width:1,height:1,scale:1}},sessionId)
+  assert(await evaluate(cdp,sessionId,`(async()=>{const i=new Image();i.src='data:image/png;base64,${focusShot.data}';await i.decode();const c=document.createElement('canvas');c.width=1;c.height=1;const x=c.getContext('2d');x.drawImage(i,0,0);const actual=[...x.getImageData(0,0,1,1).data];x.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--mint');x.fillRect(0,0,1,1);return actual.every((v,n)=>Math.abs(v-x.getImageData(0,0,1,1).data[n])<3)})()`),'Stage focus outline is clipped or covered by the zoomed image.')
+  for(const [key,code,keyCode] of [['+','Equal',187],['-','Minus',189],['0','Digit0',48]]) {
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:keyCode},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:keyCode},sessionId)
   }
-  for (const viewport of [DESKTOP_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375}]) {
-    await setViewport(cdp,sessionId,viewport)
-    const placement=await evaluate(cdp,sessionId,`(()=>{const h=document.querySelector('.crop-handle'),r=h.getBoundingClientRect(),v=document.querySelector('.view-switch').getBoundingClientRect();return {handle:r.toJSON(),switch:v.toJSON(),hit:h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
-    assert(placement.handle.x<placement.switch.right && placement.handle.right>placement.switch.x && (placement.handle.top>=placement.switch.bottom || placement.handle.bottom<=placement.switch.top) && placement.hit,'Top-centre crop handle is covered: '+JSON.stringify(placement))
-    await resizeCropByPointer(cdp,sessionId,4,4)
-    await waitForDom(cdp,sessionId,`Math.abs(parseFloat(document.querySelector('.crop-rectangle').style.width)-4)<0.01`,'top-centre pointer resize')
-    await resizeCropByPointer(cdp,sessionId,3,3)
+  await waitForDom(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom==='1'`,'stage keyboard zoom and reset')
+  const outputBeforeZoom=await evaluate(cdp,sessionId,`document.querySelector('.processed-preview').src`)
+  await zoomCanvas(cdp,sessionId,0.5)
+  assert(await evaluate(cdp,sessionId,`Math.abs(document.querySelector('.crop-surface').getBoundingClientRect().width-500)<1 && document.querySelector('.processed-preview').src===${JSON.stringify(outputBeforeZoom)}`),'Wheel zoom must change only display scale.')
+  await zoomCanvas(cdp,sessionId,1)
+  await resizeCropByPointer(cdp,sessionId,50,50)
+  assert(await evaluate(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)===50 && parseFloat(document.querySelector('.crop-rectangle').style.height)===50`),'Corner gestures must begin from the requested half-size crop.')
+  for(const corner of ['bottom-right','bottom-left','top-left','top-right']) {
+    const before=await evaluate(cdp,sessionId,`(()=>{const h=document.querySelector('[data-corner="${corner}"]'),r=h.getBoundingClientRect(),c=document.querySelector('.crop-rectangle').style;return {x:r.x+r.width/2,y:r.y+r.height/2,left:parseFloat(c.left),top:parseFloat(c.top),width:parseFloat(c.width),height:parseFloat(c.height),hit:h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
+    assert(before.hit,'Corner must receive pointer input: '+corner)
+    const dx=corner.endsWith('left')?12:-12,dy=corner.startsWith('top')?12:-12
+    await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:before.x,y:before.y,button:'left',clickCount:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:before.x+dx,y:before.y+dy,button:'left',buttons:1},sessionId)
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:before.x+dx,y:before.y+dy,button:'left',clickCount:1},sessionId)
+    await waitForDom(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)<${before.width}`,'four corner resize '+corner)
+    const after=await evaluate(cdp,sessionId,`(()=>{const c=document.querySelector('.crop-rectangle').style;return {left:parseFloat(c.left),top:parseFloat(c.top),width:parseFloat(c.width),height:parseFloat(c.height)}})()`)
+    assert(Math.abs((after.left+(corner.endsWith('left')?after.width:0))-(before.left+(corner.endsWith('left')?before.width:0)))<0.001 && Math.abs((after.top+(corner.startsWith('top')?after.height:0))-(before.top+(corner.startsWith('top')?before.height:0)))<0.001,'Opposite corner moved: '+corner)
+    await evaluate(cdp,sessionId,`document.querySelector('[data-corner="${corner}"]').focus()`)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39},sessionId)
+    await waitForDom(cdp,sessionId,`Math.abs((parseFloat(document.querySelector('.crop-rectangle').style.width)-${after.width})*10-(${corner.endsWith('left')?-1:1}))<0.001`,'one pixel keyboard resize '+corner)
+
   }
-  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('.crop-preview'),c=document.querySelector('.crop-rectangle').getBoundingClientRect(),r=p.getBoundingClientRect();return p.src===document.querySelector('.processed-preview').src&&Math.abs(r.width-c.width)<3&&Math.abs(r.height-c.height)<3&&document.querySelector('.crop-stage-meta').classList.contains('visually-hidden')})()`),'Crop must display current output with hidden status text.')
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+  const touchCorner=await evaluate(cdp,sessionId,`(()=>{const h=document.querySelector('[data-corner="top-left"]'),r=h.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,width:parseFloat(document.querySelector('.crop-rectangle').style.width)}})()`)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:touchCorner.x,y:touchCorner.y}]},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:touchCorner.x+20,y:touchCorner.y+20}]},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId)
+  await waitForDom(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)<${touchCorner.width}`,'touch corner resize')
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
+  await waitForFullOutput(cdp,sessionId)
+  // Read the painted top edge, not just CSS: the ready preview must not cover the crop outline.
+  const edgeClip=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.crop-rectangle').getBoundingClientRect();return {x:Math.floor(r.x+r.width/2),y:Math.ceil(r.y),width:2,height:2,scale:1}})()`)
+  const edgeShot=await cdp.send('Page.captureScreenshot',{format:'png',clip:edgeClip},sessionId)
+  const outlineVisible=await evaluate(cdp,sessionId,`(async()=>{const i=new Image();i.src='data:image/png;base64,${edgeShot.data}';await i.decode();const c=document.createElement('canvas');c.width=2;c.height=2;const x=c.getContext('2d');x.drawImage(i,0,0);const actual=[...x.getImageData(0,0,1,1).data];x.fillStyle=getComputedStyle(document.documentElement).getPropertyValue('--mint');x.fillRect(0,0,2,2);return actual.every((v,n)=>Math.abs(v-x.getImageData(0,0,1,1).data[n])<3)})()`)
+  assert(outlineVisible,'Ready preview obscures the crop outline.')
+  await captureScreenshot(cdp,sessionId,'four-corner-preview.png')
   await setOutputPanel(cdp,sessionId,true)
 
   // Tiny crops and rounded reduced previews must keep a single aligned frame.

@@ -26,10 +26,10 @@ File/drop
 
 | module | stable interface / ownership |
 | --- | --- |
-| `src/App.tsx` | browser UI、File input/drop、編集 intent、単一画像領域の編集・比較切替、折りたたみ圧縮、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
+| `src/App.tsx` | browser UI、File input/drop、編集 intent、下部ツールによる編集・圧縮切替、表示専用ズーム・パン、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
-| `src/image/stage.ts` | `createStageTransform` と crop surface style。CSS 表示文字列だけを組み立て、Canvas のピクセル処理は所有しない。 |
+| `src/image/stage.ts` | `createStageTransform` のCSS変換文字列、`zoomView` の表示倍率・位置の算術、`placeCropHandle` の操作領域配置を所有するpure seam。crop surface styleの組み立てとDOM測定は`App`、Canvasのピクセル処理は`raster`が所有する。 |
 | `src/image/raster.ts` | `RasterProcessor` の公開面は `process(source, editState, output)`、`clearSource()`、`dispose()`。decode、MIME/options 検証、source identity/cache、pending Promise と Worker messaging を所有する。 |
 | `src/image/worker-protocol.ts` | process/clear message の validation と `ProcessingPlan`。Worker の外から来る値を信頼せず、geometry と preview render size を組み合わせる。 |
 | `src/image/worker-scheduler.ts` | `enqueueLatest`、`completeLatest`、`clearLatest` の pure state machine。active は1件、queued は最新1件だけを表す。 |
@@ -38,13 +38,13 @@ File/drop
 
 算術の変更は geometry/scheduler/byte parser の focused unit test で説明する。Canvas、File、URL、Worker、CDP、download の変更は browser-effect boundary の E2E evidence まで必要である。
 
-クロップはアスペクト比プリセットと画像上の移動・リサイズで操作し、三分割線を固定表示する。キーボードでは枠の矢印キーを移動、右下ハンドルの矢印キーをサイズ変更に割り当て、Shiftで操作軸の変更量を1pxから10pxへ増やす（画像境界や最小サイズでは制限する）。固定比率ではもう一方の軸も比率に沿って変更する。ハンドルのキーイベントは親の移動操作へ伝播させない。座標・ズーム・パンの詳細入力UIと補助線の切替は設けない。
+クロップはアスペクト比プリセットと画像上の移動・リサイズで操作し、三分割線を固定表示する。キーボードでは枠の矢印キーを移動、四隅のハンドルの矢印キーをサイズ変更に割り当て、Shiftで操作軸の変更量を1pxから10pxへ増やす（画像境界や最小サイズでは制限する）。固定比率ではもう一方の軸も比率に沿って変更する。ハンドルのキーイベントは親の移動操作へ伝播させない。座標・ズーム・パンの詳細入力UIと補助線の切替は設けない。
 
-比較は全体表示の重ね合わせに固定し、画像領域の Pointer capture 中の座標を画像幅に対する0〜100%へ制限して境界を操作する。キーボード操作は native range input に委ね、input 自体はポインターの対象から外してタッチ時の標準ドラッグとの競合を避ける。Chromium E2E でマウス・タッチ・キーボード操作と画像端への制限を確認する。
+比較は圧縮モードで重ね合わせ表示し、画像領域の Pointer capture 中の座標を画像幅に対する0〜100%へ制限して境界を操作する。キーボード操作は native range input に委ね、input 自体はポインターの対象から外してタッチ時の標準ドラッグとの競合を避ける。Chromium E2E でマウス・タッチ・キーボード操作と画像端への制限を確認する。
 
-画像のeditor-columnはviewport全体に固定し、編集ステージと比較ステージはその全面を使う。画像は縦横比を保って全体表示し、上下のUIの高さを画像のfit計算から差し引かない。画像変更・リセットはヘッダーを設けず独立した前面の操作群として置く。保存は圧縮の削減率の隣、編集ツールは画面下部の横方向中央に置く。右下ハンドルは実際のcrop枠と前面UIのDOM矩形を測定し、操作領域全体が画面内かつ画像変更・リセット・編集比較切替・圧縮・下部ツール・エラー表示に重ならない最寄りの位置へ配置する。配置計算はstageのpure helperが担い、ResizeObserverと編集stateの変更で再測定する。画面全体がUIで埋まり操作領域を確保できない場合も、ハンドルのキーボード操作は使える。
+画像のeditor-columnはviewport全体に固定する。初期表示は画像1pxを1 CSS pxとする100%で、ホイールはカーソル位置を固定して1〜1600%の表示倍率を変更する。Space＋ドラッグまたは中ボタンドラッグで表示位置を移動し、キーボードの＋／−でズーム、0で100%に戻せる。表示用stateは編集intentと分離し、Workerのgeometry・出力寸法・結果採用に影響しない。画像変更・リセットは前面の操作群、保存は削減率の隣、クロップ・傾き・反転・圧縮は下部中央に置く。四隅のハンドルはcrop枠の中央・前面UI・他のハンドルのDOM矩形を避けた最寄りの画面内の位置へ配置する。stageのpure helperとResizeObserverで配置し、表示倍率・位置・編集stateの変更でも再測定する。切り抜き枠内には現在のintentに対応する出力プレビューを重ね、再計算中は下層のソース画像が見える。状況文字は視覚的に隠し、支援技術向けの通知を維持する。
 
-圧縮は初期状態で開き、画像領域を縮めず上に重ねる。メニューは workspace 内の右下に配置し、高さをその領域内に制限して、展開中も下部の編集ツールを覆わない。メニュー右上のパネルアイコンで最小化・展開し、展開してもパネルの幅は変えない。最小化時はアイコンだけの小さな枠を残し、設定本文をスクロールしても見出しとアイコンは固定する。設定内に折りたたみは設けず、形式の select、画質の range、幅・高さの入力欄を順に配置する。小さい画面ではパネル内をスクロールできる。最小化ボタンと Escape で閉じられ、Escape は開閉ボタンへフォーカスを戻す。
+初期モードはクロップである。下部の圧縮を選択すると同じメニュー内に形式のselect、画質のrange、幅・高さを表示し、画像領域はクロップから比較へ切り替える。独立した編集・比較切替や圧縮の開閉アイコンは設けない。設定内に折りたたみは設けず、小さい画面では設定本文だけをスクロールできる。Escapeはクロップへ戻し、圧縮ボタンへフォーカスを戻す。SpaceとEscapeは画像編集中に限ってwindowのcaptureで検知し、画像ドロップ直後のbodyフォーカスも対象にする。ウィンドウのフォーカスを失ったらキー保持・パンを解除する。形式selectでは、トップレベル文書で`showPicker`が利用できる場合、Space単独でのポップアップ表示をキー解放まで遅らせ、ドラッグ時は開かない。未対応ブラウザや埋め込み文書ではselectの標準キー操作を維持する。ステージのフォーカス表示はviewportの内側に描画する。
 
 ## State, cache, and stale requests
 
@@ -66,7 +66,7 @@ full出力の自動計算は既存のrequest id・intent guardで採用を制御
 
 `ImageEditState.straighten` は −45〜45 度の有限値で、未指定は0度。Worker境界で範囲・型を検証する。傾きでは画像を自動拡大せず、90度回転後の寸法を W×H、傾きを θ として、表示寸法を `ceil(W cosθ + H |sinθ|) × ceil(H cosθ + W |sinθ|)` に広げ、画像全体を表示する。`geometry.straightening` の角度・倍率1をCSS stage・比較画像・Workerで共有する。
 
-`CropBounds` は表示寸法と、回転前の画像寸法・最終軸のflipを反映した傾き角度を持つ。`constrainCrop` はcropの四隅が実画像内に収まるよう、必要な場合だけ縮小し、画像軸へ逆回転した中心を許容範囲へ制限する。元の表示枠からはみ出した画像部分も選択できるが、傾きで生じた空白は選択できない。UIのドラッグ・キーボード操作とWorkerは同じ制約を使う。geometryは既存のzoom/panフィールドも処理するが、UIから変更する操作は設けない。右下リサイズは左上を固定し、要求サイズまでの区間で画像の辺に達した位置に止める。
+`CropBounds` は表示寸法と、回転前の画像寸法・最終軸のflipを反映した傾き角度を持つ。`constrainCrop` はcropの四隅が実画像内に収まるよう、必要な場合だけ縮小し、画像軸へ逆回転した中心を許容範囲へ制限する。元の表示枠からはみ出した画像部分も選択できるが、傾きで生じた空白は選択できない。UIのドラッグ・キーボード操作とWorkerは同じ制約を使う。geometryは既存のzoom/panフィールドも処理するが、UIから変更する操作は設けない。四隅のリサイズは反対の角を固定し、要求サイズまでの区間で画像の辺に達した位置に止める。
 
 `straightenEditState` は傾き変更時の表示枠の中心差をcropへ反映し、実画像内へ収める。必要な縮小では出力寸法も変わる。「元画像」の比率は傾きによる外接矩形ではなく90度回転後の元寸法を使う。`sourceCrop` は最終軸のflip、傾き、90度回転を逆変換した四隅のbounding boxである。
 
@@ -121,7 +121,7 @@ Chromium E2E は CDP の HTTP/WebSocket 観測と static-server request log を�
 | evidence | proves |
 | --- | --- |
 | `src/image/geometry.test.ts` | display dimensions、final-display crop、aspect、zoom/pan、rotation、resize、flip の source mapping |
-| `src/image/stage.test.ts` | CSS transform の rotation/flip order と crop surface sizing |
+| `src/image/stage.test.ts` | CSS transform の rotation/flip order、表示ズームの固定点・倍率制限、ハンドルの画面内配置と障害物回避 |
 | `src/image/raster.test.ts` / `raster.processor.test.ts` | MIME/options、preview sizing、worker request validation、clear generation と pending lifecycle |
 | `src/image/worker-scheduler.test.ts` | one-active/one-latest、queue replacement、clear generation、stale event |
 | `src/image/encoded-metadata.test.ts` | JPEG APP/COM、PNG chunk、WebP chunk/RIFF の removal/retention と malformed input の fail-closed |

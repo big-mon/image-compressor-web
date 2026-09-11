@@ -6,7 +6,8 @@ import {
   calculateImageGeometry,
   constrainCrop,
   createEditState,
-  resizeCropFromBottomRight,
+  resizeCropFromCorner,
+  type CropCorner,
   rotateEditState,
   straightenEditState,
   translateCrop,
@@ -28,7 +29,7 @@ import {
   type RasterResult,
 } from './image/raster'
 import {
-  createCropSurfaceStyle,
+  zoomView,
   placeCropHandle,
   createStageTransform,
 } from './image/stage'
@@ -59,10 +60,13 @@ interface SourceAsset {
   readonly objectUrl: string
 }
 
+const CROP_CORNERS: readonly CropCorner[] = ['bottom-right', 'bottom-left', 'top-left', 'top-right']
+const CORNER_LABELS = { 'bottom-right': '右下', 'bottom-left': '左下', 'top-left': '左上', 'top-right': '右上' }
 type CropInteractionMode = 'move' | 'resize'
 
 interface CropInteraction {
   readonly pointerId: number
+  readonly corner: CropCorner
   readonly mode: CropInteractionMode
   readonly startX: number
   readonly startY: number
@@ -79,10 +83,16 @@ function App() {
   const [editState, setEditState] = useState<ImageEditState | undefined>()
   const [outputMime, setOutputMime] = useState<OutputMime>('image/jpeg')
   const [quality, setQuality] = useState(0.82)
-  const [editorMode, setEditorMode] = useState<'crop' | 'transform'>('crop')
-  const [editorView, setEditorView] = useState<'edit' | 'compare'>('edit')
-  const [outputOpen, setOutputOpen] = useState(true)
-  const outputToggleRef = useRef<HTMLButtonElement>(null)
+  const [editorMode, setEditorMode] = useState<'crop' | 'transform' | 'compress'>('crop')
+  const editorView = editorMode === 'compress' ? 'compare' : 'edit'
+  const outputOpen = editorMode === 'compress'
+  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
+  const editorRef = useRef<HTMLDivElement>(null)
+  const spaceHeld = useRef(false)
+  const spacePanned = useRef(false)
+  const spaceSelect = useRef<HTMLSelectElement | null>(null)
+  const panStart = useRef<{ pointerId: number; x: number; y: number; viewX: number; viewY: number } | null>(null)
+  const compressionTabRef = useRef<HTMLButtonElement>(null)
   const editChangedAtRef = useRef(0)
   const [renderedResult, setRenderedResult] = useState<RasterResult | undefined>()
   const [renderedUrl, setRenderedUrl] = useState('')
@@ -395,7 +405,7 @@ function App() {
       sourceUrlRef.current = objectUrl
       setAsset({ file, pixels, objectUrl })
       setEditorMode('crop')
-      setEditorView('edit')
+      setView({ zoom: 1, x: 0, y: 0 })
       setEditState(createEditState({ width: pixels.width, height: pixels.height }))
       setCandidatePending(false)
       setFileError('')
@@ -539,6 +549,7 @@ function App() {
   const beginCropInteraction = (
     event: ReactPointerEvent<HTMLElement>,
     mode: CropInteractionMode,
+    corner: CropCorner = 'bottom-right',
   ) => {
     if (!editState || !geometry || !cropSurfaceRef.current) {
       return
@@ -548,6 +559,7 @@ function App() {
     cropSurfaceRef.current.setPointerCapture(event.pointerId)
     cropInteractionRef.current = {
       pointerId: event.pointerId,
+      corner,
       mode,
       startX: event.clientX,
       startY: event.clientY,
@@ -568,11 +580,12 @@ function App() {
     if (interaction.mode === 'resize') {
       updateEditState((current) => ({
         ...current,
-        crop: resizeCropFromBottomRight(
+        crop: resizeCropFromCorner(
           interaction.startEffectiveCrop,
           { x: deltaX, y: deltaY },
           interaction.displaySize,
           current.aspectRatio,
+          interaction.corner,
         ),
         zoom: 1,
         panX: 0,
@@ -604,7 +617,7 @@ function App() {
     }
   }
 
-  const editCropWithKeyboard = (event: React.KeyboardEvent<HTMLElement>, mode: CropInteractionMode) => {
+  const editCropWithKeyboard = (event: React.KeyboardEvent<HTMLElement>, mode: CropInteractionMode, corner: CropCorner = 'bottom-right') => {
     if (!geometry) {
       return
     }
@@ -625,13 +638,14 @@ function App() {
     event.stopPropagation()
     updateEditState((current) => {
       // Follow the ratio in both axes so projection preserves the pressed axis's step.
+      const sign = (corner.endsWith('left') ? -1 : 1) * (corner.startsWith('top') ? -1 : 1)
       const resizeDelta = current.aspectRatio === 'free' ? delta : delta.x !== 0
-        ? { x: delta.x, y: delta.x * geometry.crop.height / geometry.crop.width }
-        : { x: delta.y * geometry.crop.width / geometry.crop.height, y: delta.y }
+        ? { x: delta.x, y: delta.x * geometry.crop.height / geometry.crop.width * sign }
+        : { x: delta.y * geometry.crop.width / geometry.crop.height * sign, y: delta.y }
       return {
         ...current,
         crop: mode === 'resize'
-          ? resizeCropFromBottomRight(geometry.crop, resizeDelta, geometry.displaySize, current.aspectRatio)
+          ? resizeCropFromCorner(geometry.crop, resizeDelta, geometry.displaySize, current.aspectRatio, corner)
           : translateCrop(geometry.crop, delta, geometry.displaySize, current.aspectRatio),
         zoom: 1,
         panX: 0,
@@ -725,42 +739,109 @@ function App() {
       }
     : undefined
   const cropSurfaceStyle: CSSProperties | undefined = geometry
-    ? createCropSurfaceStyle(geometry.displaySize)
+    ? { width: geometry.displaySize.width * view.zoom, height: geometry.displaySize.height * view.zoom, transform: `translate(${view.x}px, ${view.y}px)` }
     : undefined
   const comparisonAvailable = Boolean(renderedUrl && renderedResult)
   const errorMessage = fileError || processingError || processorError
   const busy = candidatePending || previewPending || fullOutputPending || exportPending
   const comparisonFrameStyle: CSSProperties | undefined = geometry
     ? {
-        aspectRatio: `${geometry.crop.width} / ${geometry.crop.height}`,
-        maxWidth: `min(100%, calc(100cqh * ${geometry.crop.width / geometry.crop.height}))`,
+        width: geometry.crop.width * view.zoom,
+        height: geometry.crop.height * view.zoom,
+        transform: `translate(${view.x}px, ${view.y}px)`,
       }
     : undefined
   useLayoutEffect(() => {
     if (!geometry || editorView !== 'edit') return
     const stage = cropSurfaceRef.current?.closest('.stage-area')
     const crop = stage?.querySelector<HTMLElement>('.crop-rectangle')
-    const handle = stage?.querySelector<HTMLButtonElement>('.crop-handle')
+    const handles = [...(stage?.querySelectorAll<HTMLButtonElement>('.crop-handle') ?? [])]
     const shell = stage?.closest('.editor-shell')
-    if (!stage || !crop || !handle || !shell) return
-    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.view-switch,.output-menu,.editor-bottom,.error-message')]
+    if (!stage || !crop || !handles.length || !shell) return
+    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.editor-bottom,.error-message')]
     const placeHandle = () => {
       const frame = stage.getBoundingClientRect()
       const bounds = crop.getBoundingClientRect()
-      const position = placeCropHandle(
-        { x: bounds.right, y: bounds.bottom },
-        { width: frame.width, height: frame.height },
-        handle.getBoundingClientRect().width,
-        controls.map(control => control.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0),
-      )
-      handle.style.left = `${position.left}px`
-      handle.style.top = `${position.top}px`
+      const obstacles = [new DOMRect(bounds.x + bounds.width / 2 - 12, bounds.y + bounds.height / 2 - 12, 24, 24), ...controls.map(control => control.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0)]
+      for (const handle of handles) {
+        const size = handle.getBoundingClientRect().width
+        const corner = handle.dataset.corner as CropCorner
+        const position = placeCropHandle(
+          { x: corner.endsWith('left') ? bounds.left + size : bounds.right, y: corner.startsWith('top') ? bounds.top + size : bounds.bottom },
+          { width: frame.width, height: frame.height }, size, obstacles,
+        )
+        handle.style.left = `${position.left}px`
+        handle.style.top = `${position.top}px`
+        obstacles.push(new DOMRect(position.left, position.top, size, size))
+      }
     }
     placeHandle()
     const observer = new ResizeObserver(placeHandle)
     for (const element of [shell, stage, crop, ...controls]) observer.observe(element)
     return () => observer.disconnect()
-  }, [geometry, editorView, editorMode, outputOpen, errorMessage])
+  }, [geometry, editorView, editorMode, outputOpen, errorMessage, view])
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const wheel = (event: WheelEvent) => {
+      event.preventDefault()
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? editor.clientHeight : 1)
+      setView(current => zoomView(current, delta, { x: event.clientX - editor.clientWidth / 2, y: event.clientY - editor.clientHeight / 2 }))
+    }
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.key === ' ') {
+        spaceHeld.current = true
+        if (!event.repeat) spacePanned.current = false
+        // Defer the native popup until release; preserve native selection without this API.
+        if (event.target instanceof HTMLSelectElement && typeof event.target.showPicker === 'function' && window.top === window) {
+          event.preventDefault()
+          spaceSelect.current = event.target
+        } else if (event.target === document.body || event.target === document.documentElement) {
+          event.preventDefault()
+        }
+      }
+      if (outputOpen && event.key === 'Escape') {
+        event.preventDefault()
+        setEditorMode('crop')
+        compressionTabRef.current?.focus()
+      }
+    }
+    const keyUp = (event: KeyboardEvent) => {
+      if (event.key !== ' ') return
+      spaceHeld.current = false
+      const select = spaceSelect.current
+      spaceSelect.current = null
+      if (spacePanned.current) {
+        event.preventDefault()
+        event.stopPropagation()
+      } else if (select && document.activeElement === select) {
+        event.preventDefault()
+        try { select.showPicker() } catch {
+          // Native arrow-key selection remains available if activation expired.
+        }
+      }
+    }
+    const releaseSpace = (event: Event) => {
+      if (event.type === 'blur') {
+        spaceHeld.current = false
+        panStart.current = null
+      }
+      if (event.type === 'blur' || event.target === spaceSelect.current) spaceSelect.current = null
+    }
+    editor.addEventListener('wheel', wheel, { passive: false })
+    window.addEventListener('keydown', keyDown, true)
+    window.addEventListener('keyup', keyUp, true)
+    window.addEventListener('blur', releaseSpace)
+    window.addEventListener('focusout', releaseSpace)
+    return () => {
+      editor.removeEventListener('wheel', wheel)
+      window.removeEventListener('keydown', keyDown, true)
+      window.removeEventListener('keyup', keyUp, true)
+      window.removeEventListener('blur', releaseSpace)
+      window.removeEventListener('focusout', releaseSpace)
+    }
+  }, [asset, outputOpen])
+
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
         left: `${-currentCrop.x / currentCrop.width * 100}%`,
@@ -793,7 +874,14 @@ function App() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
+                  if (event.key === ' ') event.preventDefault()
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    document.getElementById('image-input')?.click()
+                  }
+                }}
+                onKeyUp={event => {
+                  if (event.key === ' ') {
                     event.preventDefault()
                     document.getElementById('image-input')?.click()
                   }
@@ -805,12 +893,29 @@ function App() {
         </div>}
         {asset && editState && geometry ? <>
           <section className="workspace" aria-label="画像エディター" data-quick-width={quickPreviewMetrics?.outputWidth} data-quick-height={quickPreviewMetrics?.outputHeight} data-quick-bytes={quickPreviewMetrics?.outputBytes}>
-            <div className="editor-column">
-              <div className="view-switch" role="group" aria-label="画像の表示">
-                <button type="button" aria-pressed={editorView === 'edit'} onClick={() => setEditorView('edit')}>編集</button>
-                <button type="button" aria-pressed={editorView === 'compare'} onClick={() => setEditorView('compare')}>比較</button>
-              </div>
-                <div className="stage-area" hidden={editorView !== 'edit'} aria-label="画像編集ステージ">
+            <div className="editor-column" ref={editorRef} data-view-zoom={view.zoom}
+              onKeyDown={event => {
+                if (event.key === ' ') event.preventDefault()
+                if (['+', '=', '-', '0'].includes(event.key)) {
+                  event.preventDefault()
+                  setView(current => event.key === '0' ? { zoom: 1, x: 0, y: 0 } : zoomView(current, event.key === '-' ? 100 : -100, { x: 0, y: 0 }))
+                }
+              }}
+              onPointerDownCapture={event => {
+                if (!spaceHeld.current && event.button !== 1) return
+                event.preventDefault(); event.stopPropagation()
+                spacePanned.current = spaceHeld.current
+                panStart.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, viewX: view.x, viewY: view.y }
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerMove={event => {
+                const start = panStart.current
+                if (start?.pointerId === event.pointerId) setView(current => ({ ...current, x: start.viewX + event.clientX - start.x, y: start.viewY + event.clientY - start.y }))
+              }}
+              onPointerUp={event => { if (panStart.current?.pointerId === event.pointerId) { panStart.current = null; event.currentTarget.releasePointerCapture(event.pointerId) } }}
+              onPointerCancel={() => { panStart.current = null }}
+            >
+                <div className="stage-area" hidden={editorView !== 'edit'} tabIndex={0} aria-label="画像編集ステージ。スクロールで拡大縮小、Spaceとドラッグで表示位置を移動、0で100%表示">
                   <div
                     ref={cropSurfaceRef}
                     className="crop-surface"
@@ -842,15 +947,16 @@ function App() {
                       onPointerDown={(event) => beginCropInteraction(event, 'move')}
                     >
                       <span className="crop-guide crop-grid" aria-hidden="true" />
-                      <button
-                        className="crop-handle"
-                        type="button"
-                        aria-label="右下のハンドル。左上を固定して切り抜き範囲をリサイズ。矢印キーでサイズ変更、Shiftで大きく変更"
-                        onKeyDown={(event) => editCropWithKeyboard(event, 'resize')}
-                        onPointerDown={(event) => beginCropInteraction(event, 'resize')}
-                      />
+                      {comparisonAvailable && <img className="crop-preview" src={renderedUrl} alt="切り抜き範囲の出力プレビュー" draggable={false} />}
+
                     </div>
                   </div>
+                      {CROP_CORNERS.map(corner => <button
+                        key={corner} className="crop-handle" data-corner={corner} type="button"
+                        aria-label={`${CORNER_LABELS[corner]}のハンドル。反対の角を固定してリサイズ。矢印キーでサイズ変更、Shiftで大きく変更`}
+                        onKeyDown={event => editCropWithKeyboard(event, 'resize', corner)}
+                        onPointerDown={event => beginCropInteraction(event, 'resize', corner)}
+                      />)}
                 </div>
 
               <section className="comparison-section" aria-label="仕上がりの比較" hidden={editorView !== 'compare'}>
@@ -909,7 +1015,7 @@ function App() {
                             />
                           ) : null}
                           {comparisonAvailable ? (
-                            <span className="comparison-layer-label comparison-result-label">
+                            <span className="comparison-layer-label comparison-result-label visually-hidden">
                               {renderedIsPreview ? 'クイック確認' : '保存用画像'}
                             </span>
                           ) : null}
@@ -934,7 +1040,7 @@ function App() {
                           <div className="comparison-divider" style={{ left: `${comparisonSplit}%` }} aria-hidden="true" />
                         ) : null}
                         {!comparisonAvailable ? (
-                          <div className="comparison-empty" role="status" aria-live="polite">
+                          <div className="comparison-empty visually-hidden" role="status" aria-live="polite">
                             {previewPending || fullOutputPending
                               ? '出力結果を更新中…'
                               : errorMessage
@@ -949,20 +1055,15 @@ function App() {
                   </div>
 
               </section>
-              <div className="crop-stage-meta" role="status" aria-live="polite">
+              <div className="crop-stage-meta visually-hidden" role="status" aria-live="polite">
                 <span className={`status-chip${busy ? ' is-busy' : ''}`}>
                   {fileError ? 'エラー' : candidatePending ? '画像を読み込み中…' : previewPending ? '圧縮プレビューを更新中…' : fullOutputPending ? '保存用画像を確認中…' : exportPending ? '保存中…' : errorMessage ? 'エラー' : renderedResult ? 'プレビュー準備完了' : '画像を準備中'}
                 </span>
                 <span className="stage-preview-label">{editorView === 'edit' ? '元画像（切り抜き編集）' : renderedIsPreview ? 'クイック確認' : '保存用画像'}</span>
               </div>
             </div>
-            <div className={`output-menu${outputOpen ? ' is-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape') { setOutputOpen(false); outputToggleRef.current?.focus() } }}>
-              <div className="output-menu-header">
-                <h2 className="output-menu-title" hidden={!outputOpen}>圧縮</h2>
-              <button ref={outputToggleRef} type="button" className="secondary-button output-toggle" aria-label={outputOpen ? '圧縮を最小化' : '圧縮を展開'} title={outputOpen ? '圧縮を最小化' : '圧縮を展開'} aria-expanded={outputOpen} aria-controls="output-panel" onClick={() => setOutputOpen(!outputOpen)}>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 8h18" /><path d={outputOpen ? 'm8 13 4 4 4-4' : 'm8 17 4-4 4 4'} /></svg>
-              </button>
-              </div>
+          </section>
+          <div className="editor-bottom">
             <aside id="output-panel" className="settings-column" aria-label="圧縮" hidden={!outputOpen}>
                 <label className="visually-hidden" htmlFor="output-format">形式</label>
                 <select id="output-format" value={outputMime} onChange={(event) => updateOutputMime(event.target.value as OutputMime)}>
@@ -981,15 +1082,12 @@ function App() {
                   <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
                 </div>
                 <div className="compression-result">
-                <div className="reduction-line" role="status" aria-live="polite"><strong>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
+                <div className="reduction-line" role="status" aria-live="polite"><strong className={!fullOutputMetrics && !processingError ? 'visually-hidden' : undefined}>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
                   <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
                 </div>
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
             </aside>
-            </div>
-          </section>
-          <div className="editor-bottom">
             <div className="mode-controls crop-controls" hidden={editorMode !== 'crop' || editorView !== 'edit'}>
               <div className="aspect-presets" role="group" aria-label="アスペクト比">
                 {ASPECT_OPTIONS.map(option => {
@@ -1019,8 +1117,9 @@ function App() {
               </div>
             </div>
             <nav className="edit-modes" aria-label="編集モード">
-              <button type="button" aria-pressed={editorMode === 'crop'} onClick={() => { setEditorMode('crop'); setEditorView('edit') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v16h16M2 6h16v16M9 6h9v9" /></svg><span>クロップ</span></button>
-              <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setEditorView('edit') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
+              <button type="button" aria-pressed={editorMode === 'crop'} onClick={() => { setEditorMode('crop'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v16h16M2 6h16v16M9 6h9v9" /></svg><span>クロップ</span></button>
+              <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
+              <button ref={compressionTabRef} type="button" data-mode="compress" aria-controls="output-panel" aria-pressed={outputOpen} onClick={() => { setEditorMode('compress'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 8l4 4 4-4M12 12v5" /></svg><span>圧縮</span></button>
             </nav>
           </div>
         </> : (
