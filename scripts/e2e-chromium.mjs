@@ -1228,6 +1228,8 @@ async function resizeCropByPointer(cdp, sessionId, width, height) {
   await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:drag.x,y:drag.y,button:'left',clickCount:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:drag.toX,y:drag.toY,button:'left',buttons:1},sessionId)
   await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:drag.toX,y:drag.toY,button:'left',clickCount:1},sessionId)
+  // Let continuous pointer events render before the next gesture or mode change.
+  await evaluate(cdp,sessionId,`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`)
   await setOutputPanel(cdp,sessionId,panelOpen)
 }
 
@@ -2279,6 +2281,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp,sessionId,`Math.abs(document.querySelector('.crop-surface').getBoundingClientRect().width-500)<1 && document.querySelector('.processed-preview').src===${JSON.stringify(outputBeforeZoom)}`),'Wheel zoom must change only display scale.')
   await zoomCanvas(cdp,sessionId,1)
   await resizeCropByPointer(cdp,sessionId,50,50)
+  assert(await evaluate(cdp,sessionId,`parseFloat(document.querySelector('.crop-rectangle').style.width)===50 && parseFloat(document.querySelector('.crop-rectangle').style.height)===50`),'Corner gestures must begin from the requested half-size crop.')
   for(const corner of ['bottom-right','bottom-left','top-left','top-right']) {
     const before=await evaluate(cdp,sessionId,`(()=>{const h=document.querySelector('[data-corner="${corner}"]'),r=h.getBoundingClientRect(),c=document.querySelector('.crop-rectangle').style;return {x:r.x+r.width/2,y:r.y+r.height/2,left:parseFloat(c.left),top:parseFloat(c.top),width:parseFloat(c.width),height:parseFloat(c.height),hit:h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}})()`)
     assert(before.hit,'Corner must receive pointer input: '+corner)
