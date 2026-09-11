@@ -1165,3 +1165,6 @@ body:has(.shell:not(.editor-shell)) > .static-content { flex: none; max-height: 
 .crop-handle[data-corner="top-right"], .crop-handle[data-corner="bottom-left"] { cursor: nesw-resize; }
 .editor-shell .crop-handle[data-corner^="top"]::after { top: 0; bottom: auto; }
 .editor-shell .crop-handle[data-corner$="left"]::after { left: 0; right: auto; }
+
+.stage-area:focus-visible { outline: none; }
+.stage-area:focus-visible::after { content: ''; position: absolute; inset: 1px; z-index: 6; border: 3px solid var(--mint); pointer-events: none; }
