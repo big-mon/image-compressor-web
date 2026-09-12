@@ -1958,6 +1958,62 @@ async function assertTransformedPixels(cdp, sessionId, { rotation, straighten, f
   return result
 }
 
+async function assertStraightenRuler(cdp, sessionId) {
+  await clickButton(cdp,sessionId,'傾き・反転')
+  const ruler = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect();return {x:r.x+r.width/2+60,y:r.y+r.height/2}})()`)
+  const expectAngle = async value => {
+    await waitForDom(cdp,sessionId,`Number(document.querySelector('#straighten').value)===${value} && document.querySelector('output[for=straighten]').textContent==='${value.toFixed(1)}°'`, 'ruler angle '+value)
+    assert(await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect(),m=document.querySelector('.straighten-indicator').getBoundingClientRect(),z=document.querySelector('.straighten-tick.is-zero').getBoundingClientRect();return Math.abs(m.x+m.width/2-r.x-r.width/2)<1 && Math.abs(z.x+z.width/2-(m.x+m.width/2)+${value}*8)<1})()`),'Ruler scale must move beneath the fixed central marker.')
+  }
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...ruler,button:'left',clickCount:1},sessionId)
+  await expectAngle(0) // Grabbing away from the marker must not jump the angle.
+  for (const [offset,angle] of [[48,-6],[1200,-45],[1192,-44],[-1200,45],[-1192,44]]) {
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:ruler.x+offset,y:ruler.y-60,button:'left',buttons:1},sessionId)
+    await expectAngle(angle) // Capture outside the ruler; reverse immediately at either limit.
+  }
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...ruler,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:ruler.x+30,y:ruler.y},sessionId)
+  await expectAngle(44)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...ruler,button:'left',clickCount:1},sessionId)
+  await evaluate(cdp,sessionId,`window.dispatchEvent(new Event('blur'))`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:ruler.x+30,y:ruler.y,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...ruler,button:'left',clickCount:1},sessionId)
+  await expectAngle(44)
+
+  await evaluate(cdp,sessionId,`document.querySelector('#straighten').focus()`)
+  for (const [key,keyCode,angle] of [['Home',36,-45],['ArrowRight',39,-44.9],['End',35,45],['ArrowLeft',37,44.9]]) {
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:keyCode},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:keyCode},sessionId)
+    await expectAngle(angle)
+  }
+  assert(await evaluate(cdp,sessionId,`getComputedStyle(document.querySelector('.straighten-ruler')).outlineStyle==='solid' && document.querySelector('#straighten').labels[0].textContent==='傾き' && document.querySelector('#straighten').getAttribute('aria-valuetext')==='44.9度'`),'Native keyboard input must retain its label, angle and visible focus outline.')
+  await clickButton(cdp,sessionId,'傾きを0°に戻す')
+  await expectAngle(0)
+
+  await setViewport(cdp,sessionId,MOBILE_VIEWPORT)
+  const touch = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch]},sessionId)
+  await expectAngle(0)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:touch.x-40,y:touch.y}]},sessionId)
+  await expectAngle(5)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch]},sessionId)
+  await expectAngle(5)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:touch.x+8,y:touch.y}]},sessionId)
+  await expectAngle(4)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId)
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
+  await captureScreenshot(cdp,sessionId,'straighten-ruler-touch.png')
+
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...touch,button:'left',clickCount:1},sessionId)
+  await clickButton(cdp,sessionId,'圧縮')
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:touch.x-40,y:touch.y,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...touch,button:'left',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`Number(document.querySelector('#straighten').value)===4`),'A hidden ruler must not continue editing after switching mode.')
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+}
+
 async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath, cropDragFixturePath, corruptFixturePath, unsupportedFixturePath, downloadDirectory, pageUrl, origin, requestLog, targetId, sourceFamilies, sourceOrientation }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
@@ -2020,6 +2076,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setOutputPanel(cdp,sessionId,true)
 
+  await assertStraightenRuler(cdp,sessionId)
   // PNG oracle fixture with asymmetric colored cells (large enough for reduced preview).
   const png = await evaluate(cdp,sessionId,`(() => {const c=document.createElement('canvas');c.width=1000;c.height=600;const x=c.getContext('2d');for(let y=0;y<600;y+=20) for(let z=0;z<1000;z+=20){x.fillStyle='rgb('+((z*7+y)%256)+','+((y*3+z)%256)+','+((z+y*5)%256)+')';x.fillRect(z,y,20,20)}return c.toDataURL().split(',')[1]})()`)
   await writeFile(cropDragFixturePath,Buffer.from(png,'base64'))
@@ -2045,10 +2102,11 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(pixels[1].transparent===0,'Extreme straightening introduced transparent corners.')
   await captureScreenshot(cdp,sessionId,'editor-straighten.png')
 
-  for (const viewport of [DESKTOP_VIEWPORT, MOBILE_VIEWPORT, {...MOBILE_VIEWPORT,width:667,height:375}]) {
+  for (const viewport of [...TABLET_VIEWPORTS, DESKTOP_VIEWPORT, MOBILE_VIEWPORT, {...MOBILE_VIEWPORT,width:320,height:568}, {...MOBILE_VIEWPORT,width:667,height:375}]) {
     await setViewport(cdp,sessionId,viewport)
     const controls = await evaluate(cdp,sessionId,`(()=>{const slider=document.querySelector('.straighten-control').getBoundingClientRect(),icons=document.querySelector('.transform-buttons').getBoundingClientRect();return {sliderBottom:slider.bottom,iconsTop:icons.top,iconsBottom:icons.bottom,buttons:[...document.querySelectorAll('.transform-buttons button')].map(b=>({label:b.getAttribute('aria-label'),text:b.textContent.trim(),w:b.getBoundingClientRect().width,h:b.getBoundingClientRect().height})),cropVisible:document.querySelector('.crop-rectangle').getBoundingClientRect().height>0}})()`)
     assert(controls.iconsTop>=controls.sliderBottom && controls.iconsBottom<=viewport.height && controls.cropVisible && controls.buttons.every(b=>b.label && !b.text && b.w>=44 && b.h>=44),'Transform controls must be separate rows with accessible icons: '+JSON.stringify(controls))
+    assert(await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect(),b=document.querySelector('.editor-bottom').getBoundingClientRect(),z=document.querySelector('.zoom-controls').getBoundingClientRect(),s=document.querySelector('.compression-result').getBoundingClientRect();return r.height>=44 && r.left>=0 && r.right<=innerWidth && b.top>=z.bottom+8 && !(b.left<s.right && b.right>s.left && b.top<s.bottom && b.bottom>s.top) && document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===document.querySelector('.straighten-ruler') && document.documentElement.scrollHeight===innerHeight})()`),'Ruler must remain reachable without overlapping zoom/save or causing page scrolling.')
     await assertStraightenedStage(cdp,sessionId)
     await captureScreenshot(cdp,sessionId,`icon-controls-${viewport.width}.png`)
   }

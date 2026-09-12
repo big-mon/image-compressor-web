@@ -1057,7 +1057,18 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .crop-controls { flex-wrap: wrap; }
 .crop-controls .field-help { display: none; }
 .transform-controls { flex-direction: column; gap: 0.35rem; }
-.straighten-control { width: min(28rem, 100%); }
+.straighten-control { width: min(28rem, 100%); gap: 0.15rem; }
+.straighten-control .range-label { justify-content: center; }
+.straighten-ruler { position: relative; width: 100%; height: 2.75rem; overflow: hidden; border-radius: 0.25rem; touch-action: none; user-select: none; cursor: ew-resize; }
+.straighten-ruler:has(:focus-visible) { outline: 2px solid var(--mint); outline-offset: 2px; }
+.straighten-ruler input { pointer-events: none; }
+.straighten-ruler::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, var(--panel), transparent 12%, transparent 88%, var(--panel)); }
+.straighten-scale { position: absolute; left: 50%; top: 0; height: 100%; pointer-events: none; }
+.straighten-tick { position: absolute; top: 10px; width: 1px; height: 10px; transform: translateX(-50%); background: var(--muted); }
+.straighten-tick.is-major { top: 5px; height: 15px; background: var(--soft); }
+.straighten-tick.is-zero { background: var(--mint); }
+.straighten-tick > span { position: absolute; top: 19px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 0.65rem; font-variant-numeric: tabular-nums; }
+.straighten-indicator { position: absolute; top: 0; left: 50%; width: 2px; height: 24px; transform: translateX(-50%); border-radius: 1px; background: var(--mint); pointer-events: none; }
 .transform-buttons { display: flex; gap: 0.5rem; }
 .edit-modes { display: flex; justify-content: center; gap: 1.5rem; margin-top: 0.5rem; }
 .edit-modes button { display: grid; justify-items: center; gap: 0.25rem; min-width: 6.5rem; font-size: 0.8rem; }
@@ -1096,8 +1107,7 @@ input[type="number"], select { background-color: #101010; }
 }
 
 @media (max-height: 500px) {
-  .crop-controls .field-label-row,
-  .straighten-control .range-label label {
+  .crop-controls .field-label-row {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -1105,9 +1115,6 @@ input[type="number"], select { background-color: #101010; }
     clip-path: inset(50%);
   }
   .crop-controls .aspect-ratio-control { gap: 0; }
-  .straighten-control { display: flex; align-items: center; gap: 0.5rem; }
-  .straighten-control input { min-width: 0; }
-  .straighten-control .range-label { flex: none; gap: 0.25rem; }
 }
 
 .aspect-presets { display: flex; gap: 0.3rem; min-width: 0; max-width: 100%; overflow-x: auto; padding: 0.25rem; }

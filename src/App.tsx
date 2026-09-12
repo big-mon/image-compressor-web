@@ -53,6 +53,7 @@ const OUTPUT_OPTIONS: readonly { value: OutputMime; label: string }[] = [
 ]
 
 const PREVIEW_MAX_DIMENSION = 960
+const STRAIGHTEN_TICK_PX = 8
 
 interface SourceAsset {
   readonly file: File
@@ -120,6 +121,8 @@ function App() {
   const exportActiveRef = useRef<{ requestId: number; intentGeneration: number } | undefined>(undefined)
   const currentIntentRef = useRef<ResultIntent | undefined>(undefined)
   const comparisonInputRef = useRef<HTMLInputElement>(null)
+  const straightenInputRef = useRef<HTMLInputElement>(null)
+  const straightenDragRef = useRef<{ pointerId: number; x: number; degrees: number; source: SourceAsset } | null>(null)
   const cropSurfaceRef = useRef<HTMLDivElement | null>(null)
   const cropInteractionRef = useRef<CropInteraction | undefined>(undefined)
 
@@ -651,6 +654,22 @@ function App() {
     }
   }
 
+  const moveStraightenRuler = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = straightenDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.source !== asset || editorMode !== 'transform') return
+    drag.degrees = Math.max(-45, Math.min(45, drag.degrees - (event.clientX - drag.x) / STRAIGHTEN_TICK_PX))
+    drag.x = event.clientX
+    const degrees = Math.round(drag.degrees * 10) / 10
+    if (degrees !== (editState?.straighten ?? 0)) {
+      updateEditState(current => straightenEditState(drag.source.pixels, current, degrees))
+    }
+  }
+
+  const endStraightenDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (straightenDragRef.current?.pointerId === event.pointerId) straightenDragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   const download = async () => {
     if (!asset || !editState || !processorRef.current) {
       return
@@ -809,6 +828,7 @@ function App() {
       if (event.type === 'blur') {
         spaceHeld.current = false
         panStart.current = null
+        straightenDragRef.current = null
       }
       if (event.type === 'blur' || event.target === spaceSelect.current) spaceSelect.current = null
     }
@@ -1094,8 +1114,34 @@ function App() {
             </div>
             <div className="mode-controls transform-controls" hidden={editorMode !== 'transform' || editorView !== 'edit'}>
               <div className="straighten-control range-control">
-                <div className="range-label"><label htmlFor="straighten">傾き</label><output htmlFor="straighten">{(editState.straighten ?? 0).toFixed(1)}°</output></div>
-                <input id="straighten" type="range" min="-45" max="45" step="0.1" value={editState.straighten ?? 0} onChange={event => updateEditState(current => straightenEditState(asset.pixels, current, Number(event.target.value)))} />
+                <div className="range-label"><label className="visually-hidden" htmlFor="straighten">傾き</label><output htmlFor="straighten">{(editState.straighten ?? 0).toFixed(1)}°</output></div>
+                <div className="straighten-ruler"
+                  onPointerDown={event => {
+                    if (!event.isPrimary || event.button !== 0) return
+                    event.preventDefault()
+                    straightenInputRef.current?.focus({ preventScroll: true })
+                    event.currentTarget.setPointerCapture(event.pointerId)
+                    straightenDragRef.current = { pointerId: event.pointerId, x: event.clientX, degrees: editState.straighten ?? 0, source: asset }
+                  }}
+                  onPointerMove={moveStraightenRuler}
+                  onPointerUp={endStraightenDrag}
+                  onPointerCancel={endStraightenDrag}
+                  onLostPointerCapture={endStraightenDrag}
+                >
+                  <input ref={straightenInputRef} className="visually-hidden" id="straighten" type="range" min="-45" max="45" step="0.1" value={editState.straighten ?? 0}
+                    aria-valuetext={`${(editState.straighten ?? 0).toFixed(1)}度`}
+                    onBlur={() => { straightenDragRef.current = null }}
+                    onChange={event => {
+                      straightenDragRef.current = null
+                      updateEditState(current => straightenEditState(asset.pixels, current, Number(event.target.value)))
+                    }} />
+                  <div className="straighten-scale" aria-hidden="true" style={{ width: 90 * STRAIGHTEN_TICK_PX, transform: `translateX(calc(-50% - ${(editState.straighten ?? 0) * STRAIGHTEN_TICK_PX}px))` }}>
+                    {Array.from({ length: 91 }, (_, index) => <span key={index} className={`straighten-tick${index % 5 === 0 ? ' is-major' : ''}${index === 45 ? ' is-zero' : ''}`} style={{ left: index * STRAIGHTEN_TICK_PX }}>
+                      {index % 15 === 0 ? <span>{index - 45}</span> : null}
+                    </span>)}
+                  </div>
+                  <span className="straighten-indicator" aria-hidden="true" />
+                </div>
               </div>
               <div className="transform-buttons">
                 <button type="button" className="secondary-button icon-button" aria-label="左へ90°回転" title="左へ90°回転" onClick={() => rotateBy(-90)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 1 1 0 6M3 3v6h6" /><path d="M9 12h6v6H9z" /></svg></button>
