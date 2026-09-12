@@ -983,6 +983,13 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 }
 .image-actions { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: max(0.5rem, env(safe-area-inset-left)); display: flex; gap: 0.5rem; }
 .image-actions button, .image-actions .change-image-button { background-color: var(--panel); }
+.zoom-controls { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); right: max(0.5rem, env(safe-area-inset-right)); display: flex; align-items: center; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
+.zoom-controls button { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 0.7rem; background: transparent; }
+.zoom-controls button:hover:not(:disabled) { background: var(--panel-raised); }
+.zoom-controls button:focus-visible { outline-offset: -3px; }
+.zoom-controls button:disabled { opacity: 0.4; cursor: default; }
+.zoom-controls svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.zoom-controls output { width: 3rem; text-align: center; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .editor-shell .download-button { width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
 .editor-shell .download-button span { font-size: 0.8rem; }
 .editor-shell .workspace {
