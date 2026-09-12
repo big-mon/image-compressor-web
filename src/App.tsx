@@ -29,6 +29,7 @@ import {
   type RasterResult,
 } from './image/raster'
 import {
+  fitView,
   zoomView,
   placeCropHandle,
   createStageTransform,
@@ -53,6 +54,7 @@ const OUTPUT_OPTIONS: readonly { value: OutputMime; label: string }[] = [
 ]
 
 const PREVIEW_MAX_DIMENSION = 960
+const STRAIGHTEN_TICK_PX = 8
 
 interface SourceAsset {
   readonly file: File
@@ -83,10 +85,15 @@ function App() {
   const [editState, setEditState] = useState<ImageEditState | undefined>()
   const [outputMime, setOutputMime] = useState<OutputMime>('image/jpeg')
   const [quality, setQuality] = useState(0.82)
-  const [editorMode, setEditorMode] = useState<'crop' | 'transform' | 'compress'>('crop')
+  const [editorMode, setEditorMode] = useState<'crop' | 'transform' | 'compress'>('compress')
   const editorView = editorMode === 'compress' ? 'compare' : 'edit'
   const outputOpen = editorMode === 'compress'
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
+  const [editView, setEditView] = useState({ zoom: 1, x: 0, y: 0 })
+  const [compressionView, setCompressionView] = useState({ zoom: 1, x: 0, y: 0 })
+  const [compressionFitZoom, setCompressionFitZoom] = useState(1)
+  const view = outputOpen ? compressionView : editView
+  const setView = outputOpen ? setCompressionView : setEditView
+  const fitZoom = outputOpen ? compressionFitZoom : 1
   const editorRef = useRef<HTMLDivElement>(null)
   const spaceHeld = useRef(false)
   const spacePanned = useRef(false)
@@ -120,6 +127,8 @@ function App() {
   const exportActiveRef = useRef<{ requestId: number; intentGeneration: number } | undefined>(undefined)
   const currentIntentRef = useRef<ResultIntent | undefined>(undefined)
   const comparisonInputRef = useRef<HTMLInputElement>(null)
+  const straightenInputRef = useRef<HTMLInputElement>(null)
+  const straightenDragRef = useRef<{ pointerId: number; x: number; degrees: number; source: SourceAsset } | null>(null)
   const cropSurfaceRef = useRef<HTMLDivElement | null>(null)
   const cropInteractionRef = useRef<CropInteraction | undefined>(undefined)
 
@@ -148,6 +157,34 @@ function App() {
       editState,
     )
   }, [asset, editState])
+
+  const comparisonWidth = geometry?.crop.width
+  const comparisonHeight = geometry?.crop.height
+  const fitComparison = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor?.clientWidth || !editor.clientHeight || !comparisonWidth || !comparisonHeight) return
+    const fitted = fitView({ width: comparisonWidth, height: comparisonHeight }, { width: editor.clientWidth, height: editor.clientHeight })
+    setCompressionView(fitted)
+    setCompressionFitZoom(fitted.zoom)
+    panStart.current = null
+  }, [comparisonWidth, comparisonHeight])
+
+  useLayoutEffect(() => {
+    const editor = editorRef.current
+    panStart.current = null
+    if (!outputOpen || !editor) return
+    fitComparison()
+    let width = editor.clientWidth, height = editor.clientHeight
+    const observer = new ResizeObserver(() => {
+      // The observer's initial notification must not overwrite a manual gesture.
+      if (width === editor.clientWidth && height === editor.clientHeight) return
+      width = editor.clientWidth
+      height = editor.clientHeight
+      fitComparison()
+    })
+    observer.observe(editor)
+    return () => observer.disconnect()
+  }, [asset, outputOpen, fitComparison])
 
   const quickPreviewMetrics = asset && quickPreviewResult
     ? calculateMetrics({ bytes: asset.file.size }, quickPreviewResult)
@@ -404,8 +441,8 @@ function App() {
       }
       sourceUrlRef.current = objectUrl
       setAsset({ file, pixels, objectUrl })
-      setEditorMode('crop')
-      setView({ zoom: 1, x: 0, y: 0 })
+      setEditorMode('compress')
+      setEditView({ zoom: 1, x: 0, y: 0 })
       setEditState(createEditState({ width: pixels.width, height: pixels.height }))
       setCandidatePending(false)
       setFileError('')
@@ -443,22 +480,6 @@ function App() {
     event.preventDefault()
     setDragging(false)
     void handleFile(event.dataTransfer.files[0])
-  }
-
-  const resetEdits = () => {
-    if (!asset) {
-      return
-    }
-    fileLoadGenerationRef.current += 1
-    setCandidatePending(false)
-    invalidatePreview()
-    try {
-      processorRef.current?.clearSource()
-    } catch (error) {
-      setPreviewPending(false)
-      setProcessingError(getErrorMessage(error, '画像処理をリセットできませんでした。'))
-    }
-    setEditState(createEditState({ width: asset.pixels.width, height: asset.pixels.height }))
   }
 
   const updateEditState = (update: (current: ImageEditState) => ImageEditState) => {
@@ -667,6 +688,22 @@ function App() {
     }
   }
 
+  const moveStraightenRuler = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = straightenDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId || drag.source !== asset || editorMode !== 'transform') return
+    drag.degrees = Math.max(-45, Math.min(45, drag.degrees - (event.clientX - drag.x) / STRAIGHTEN_TICK_PX))
+    drag.x = event.clientX
+    const degrees = Math.round(drag.degrees * 10) / 10
+    if (degrees !== (editState?.straighten ?? 0)) {
+      updateEditState(current => straightenEditState(drag.source.pixels, current, degrees))
+    }
+  }
+
+  const endStraightenDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (straightenDragRef.current?.pointerId === event.pointerId) straightenDragRef.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   const download = async () => {
     if (!asset || !editState || !processorRef.current) {
       return
@@ -758,7 +795,7 @@ function App() {
     const handles = [...(stage?.querySelectorAll<HTMLButtonElement>('.crop-handle') ?? [])]
     const shell = stage?.closest('.editor-shell')
     if (!stage || !crop || !handles.length || !shell) return
-    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.zoom-controls,.editor-bottom,.error-message')]
+    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.zoom-controls,.editor-bottom,.compression-result,.error-message')]
     const placeHandle = () => {
       const frame = stage.getBoundingClientRect()
       const bounds = crop.getBoundingClientRect()
@@ -786,7 +823,7 @@ function App() {
     const wheel = (event: WheelEvent) => {
       event.preventDefault()
       const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? editor.clientHeight : 1)
-      setView(current => zoomView(current, delta, { x: event.clientX - editor.clientWidth / 2, y: event.clientY - editor.clientHeight / 2 }))
+      setView(current => zoomView(current, delta, { x: event.clientX - editor.clientWidth / 2, y: event.clientY - editor.clientHeight / 2 }, fitZoom))
     }
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === ' ') {
@@ -825,6 +862,7 @@ function App() {
       if (event.type === 'blur') {
         spaceHeld.current = false
         panStart.current = null
+        straightenDragRef.current = null
       }
       if (event.type === 'blur' || event.target === spaceSelect.current) spaceSelect.current = null
     }
@@ -840,7 +878,7 @@ function App() {
       window.removeEventListener('blur', releaseSpace)
       window.removeEventListener('focusout', releaseSpace)
     }
-  }, [asset, outputOpen])
+  }, [asset, outputOpen, setView, fitZoom])
 
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
@@ -869,6 +907,8 @@ function App() {
                 className={`change-image-button${dragging ? ' is-dragging' : ''}`}
                 htmlFor="image-input"
                 role="button"
+                aria-label="画像を変更"
+                title="画像を変更"
                 tabIndex={0}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -887,17 +927,16 @@ function App() {
                   }
                 }}
               >
-                画像を変更
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
               </label>
-            <button type="button" className="text-button" onClick={resetEdits}>リセット</button>
         </div>}
         {asset && editState && geometry ? <>
           <div className="zoom-controls" role="group" aria-label="表示倍率">
-            <button type="button" aria-label="縮小" title="縮小" disabled={view.zoom <= 0.01} onClick={() => setView(current => zoomView(current, 100, { x: 0, y: 0 }))}>
+            <button type="button" aria-label="縮小" title="縮小" disabled={view.zoom <= Math.min(0.01, fitZoom)} onClick={() => setView(current => zoomView(current, 100, { x: 0, y: 0 }, fitZoom))}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
             </button>
             <output aria-label="現在の拡大率">{Math.round(view.zoom * 100)}%</output>
-            <button type="button" aria-label="拡大" title="拡大" disabled={view.zoom >= 16} onClick={() => setView(current => zoomView(current, -100, { x: 0, y: 0 }))}>
+            <button type="button" aria-label="拡大" title="拡大" disabled={view.zoom >= Math.max(16, fitZoom)} onClick={() => setView(current => zoomView(current, -100, { x: 0, y: 0 }, fitZoom))}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
             </button>
           </div>
@@ -907,7 +946,7 @@ function App() {
                 if (event.key === ' ') event.preventDefault()
                 if (['+', '=', '-', '0'].includes(event.key)) {
                   event.preventDefault()
-                  setView(current => event.key === '0' ? { zoom: 1, x: 0, y: 0 } : zoomView(current, event.key === '-' ? 100 : -100, { x: 0, y: 0 }))
+                  setView(current => event.key === '0' ? { zoom: 1, x: 0, y: 0 } : zoomView(current, event.key === '-' ? 100 : -100, { x: 0, y: 0 }, fitZoom))
                 }
               }}
               onPointerDownCapture={event => {
@@ -1090,10 +1129,6 @@ function App() {
                   <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
                   <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
                 </div>
-                <div className="compression-result">
-                <div className="reduction-line" role="status" aria-live="polite"><strong className={!fullOutputMetrics && !processingError ? 'visually-hidden' : undefined}>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
-                  <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
-                </div>
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
             </aside>
@@ -1113,8 +1148,34 @@ function App() {
             </div>
             <div className="mode-controls transform-controls" hidden={editorMode !== 'transform' || editorView !== 'edit'}>
               <div className="straighten-control range-control">
-                <div className="range-label"><label htmlFor="straighten">傾き</label><output htmlFor="straighten">{(editState.straighten ?? 0).toFixed(1)}°</output></div>
-                <input id="straighten" type="range" min="-45" max="45" step="0.1" value={editState.straighten ?? 0} onChange={event => updateEditState(current => straightenEditState(asset.pixels, current, Number(event.target.value)))} />
+                <div className="range-label"><label className="visually-hidden" htmlFor="straighten">傾き</label><output htmlFor="straighten">{(editState.straighten ?? 0).toFixed(1)}°</output></div>
+                <div className="straighten-ruler"
+                  onPointerDown={event => {
+                    if (!event.isPrimary || event.button !== 0) return
+                    event.preventDefault()
+                    straightenInputRef.current?.focus({ preventScroll: true })
+                    event.currentTarget.setPointerCapture(event.pointerId)
+                    straightenDragRef.current = { pointerId: event.pointerId, x: event.clientX, degrees: editState.straighten ?? 0, source: asset }
+                  }}
+                  onPointerMove={moveStraightenRuler}
+                  onPointerUp={endStraightenDrag}
+                  onPointerCancel={endStraightenDrag}
+                  onLostPointerCapture={endStraightenDrag}
+                >
+                  <input ref={straightenInputRef} className="visually-hidden" id="straighten" type="range" min="-45" max="45" step="0.1" value={editState.straighten ?? 0}
+                    aria-valuetext={`${(editState.straighten ?? 0).toFixed(1)}度`}
+                    onBlur={() => { straightenDragRef.current = null }}
+                    onChange={event => {
+                      straightenDragRef.current = null
+                      updateEditState(current => straightenEditState(asset.pixels, current, Number(event.target.value)))
+                    }} />
+                  <div className="straighten-scale" aria-hidden="true" style={{ width: 90 * STRAIGHTEN_TICK_PX, transform: `translateX(calc(-50% - ${(editState.straighten ?? 0) * STRAIGHTEN_TICK_PX}px))` }}>
+                    {Array.from({ length: 91 }, (_, index) => <span key={index} className={`straighten-tick${index % 5 === 0 ? ' is-major' : ''}${index === 45 ? ' is-zero' : ''}`} style={{ left: index * STRAIGHTEN_TICK_PX }}>
+                      {index % 15 === 0 ? <span>{index - 45}</span> : null}
+                    </span>)}
+                  </div>
+                  <span className="straighten-indicator" aria-hidden="true" />
+                </div>
               </div>
               <div className="transform-buttons">
                 <button type="button" className="secondary-button icon-button" aria-label="左へ90°回転" title="左へ90°回転" onClick={() => rotateBy(-90)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9a9 9 0 1 1 0 6M3 3v6h6" /><path d="M9 12h6v6H9z" /></svg></button>
@@ -1126,10 +1187,14 @@ function App() {
               </div>
             </div>
             <nav className="edit-modes" aria-label="編集モード">
-              <button type="button" aria-pressed={editorMode === 'crop'} onClick={() => { setEditorMode('crop'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v16h16M2 6h16v16M9 6h9v9" /></svg><span>クロップ</span></button>
-              <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
-              <button ref={compressionTabRef} type="button" data-mode="compress" aria-controls="output-panel" aria-pressed={outputOpen} onClick={() => { setEditorMode('compress'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 8l4 4 4-4M12 12v5" /></svg><span>圧縮</span></button>
+              <button type="button" aria-pressed={editorMode === 'crop'} onClick={() => { setEditorMode('crop'); setEditView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v16h16M2 6h16v16M9 6h9v9" /></svg><span>クロップ</span></button>
+              <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setEditView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
+              <button ref={compressionTabRef} type="button" data-mode="compress" aria-controls="output-panel" aria-pressed={outputOpen} onClick={() => { if (outputOpen) fitComparison(); else setEditorMode('compress') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 8l4 4 4-4M12 12v5" /></svg><span>圧縮</span></button>
             </nav>
+          </div>
+          <div className="compression-result" role="group" aria-label="保存">
+            <div className="reduction-line" role="status" aria-live="polite"><strong className={!fullOutputMetrics && !processingError ? 'visually-hidden' : undefined}>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : fullOutputPending || exportPending ? '計算中…' : '削減率は未計算'}</strong></div>
+            <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
           </div>
         </> : (
           <label

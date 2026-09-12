@@ -29,7 +29,7 @@ File/drop
 | `src/App.tsx` | browser UI、File input/drop、編集 intent、下部ツールによる編集・圧縮切替、表示専用ズーム・パン、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
-| `src/image/stage.ts` | `createStageTransform` のCSS変換文字列、`zoomView` の表示倍率・位置の算術、`placeCropHandle` の操作領域配置を所有するpure seam。crop surface styleの組み立てとDOM測定は`App`、Canvasのピクセル処理は`raster`が所有する。 |
+| `src/image/stage.ts` | `createStageTransform` のCSS変換文字列、`fitView` の比較画像の全体表示、`zoomView` の表示倍率・位置の算術、`placeCropHandle` の操作領域配置を所有するpure seam。crop surface styleの組み立てとDOM測定は`App`、Canvasのピクセル処理は`raster`が所有する。 |
 | `src/image/raster.ts` | `RasterProcessor` の公開面は `process(source, editState, output)`、`clearSource()`、`dispose()`。decode、MIME/options 検証、source identity/cache、pending Promise と Worker messaging を所有する。 |
 | `src/image/worker-protocol.ts` | process/clear message の validation と `ProcessingPlan`。Worker の外から来る値を信頼せず、geometry と preview render size を組み合わせる。 |
 | `src/image/worker-scheduler.ts` | `enqueueLatest`、`completeLatest`、`clearLatest` の pure state machine。active は1件、queued は最新1件だけを表す。 |
@@ -40,18 +40,20 @@ File/drop
 
 クロップはアスペクト比プリセットと画像上の移動・リサイズで操作し、三分割線を固定表示する。キーボードでは枠の矢印キーを移動、四隅のハンドルの矢印キーをサイズ変更に割り当て、Shiftで操作軸の変更量を1pxから10pxへ増やす（画像境界や最小サイズでは制限する）。固定比率ではもう一方の軸も比率に沿って変更する。ハンドルのキーイベントは親の移動操作へ伝播させない。座標・ズーム・パンの詳細入力UIと補助線の切替は設けない。
 
+傾きは中央の固定マーカーに対して目盛りを左右にドラッグし、±45度を0.1度刻みで調整する。Pointer captureで領域外のドラッグを継続し、端では制限して逆方向へすぐ戻せる。native range inputで矢印キー・Home・Endと支援技術の操作を維持する。
+
 比較は圧縮モードで重ね合わせ表示し、画像領域の Pointer capture 中の座標を画像幅に対する0〜100%へ制限して境界を操作する。キーボード操作は native range input に委ね、input 自体はポインターの対象から外してタッチ時の標準ドラッグとの競合を避ける。Chromium E2E でマウス・タッチ・キーボード操作と画像端への制限を確認する。
 
-画像のeditor-columnはviewport全体に固定する。初期表示は画像1pxを1 CSS pxとする100%で、ホイールはカーソル位置を固定して1〜1600%の表示倍率を変更する。右上に現在倍率と「−」「＋」ボタンを重ね、ボタンは画面中央を固定点に同じ`zoomView`で拡大縮小する。Space＋ドラッグまたは中ボタンドラッグで表示位置を移動し、キーボードの＋／−でズーム、0で100%に戻せる。表示用stateは編集intentと分離し、Workerのgeometry・出力寸法・結果採用に影響しない。画像変更・リセットは前面の操作群、保存は削減率の隣、クロップ・傾き・反転・圧縮は下部中央に置く。四隅のハンドルはcrop枠の中央・前面UI・他のハンドルのDOM矩形を避けた最寄りの画面内の位置へ配置する。stageのpure helperとResizeObserverで配置し、表示倍率・位置・編集stateの変更でも再測定する。切り抜き枠内には現在のintentに対応する出力プレビューを重ね、再計算中は下層のソース画像が見える。状況文字は視覚的に隠し、支援技術向けの通知を維持する。
+画像のeditor-columnはviewport全体に固定する。圧縮は初回・画像差し替え・モード切替時に、切り抜き後の比較画像の縦横比を保ち、全体がviewportに収まる最大倍率へ中央配置する。ResizeObserverで画面サイズ変更時も合わせ直す。編集モードの倍率・位置は別stateに保持し、初期値は画像1pxを1 CSS pxとする100%にする。ホイールはカーソル位置を固定して通常1〜1600%の表示倍率を変更する。極小・極大画像の全体表示がその範囲外になる場合は、全体表示の倍率も操作範囲に含める。画質・出力寸法の変更やquick/full結果の採用では手動の表示倍率をリセットしない。画面幅の中央に現在倍率と「−」「＋」ボタンを重ね、狭い画面では画像操作ボタンの下に配置する。ボタンは画面中央を固定点に同じ`zoomView`で拡大縮小する。Space＋ドラッグまたは中ボタンドラッグで表示位置を移動し、キーボードの＋／−でズーム、0で100%に戻せる。表示用stateは編集intentと分離し、Workerのgeometry・出力寸法・結果採用に影響しない。画像変更は左上の「×」アイコン、削減率と保存は画面右下の独立したUIとして全モードに表示し、クロップ・傾き・反転・圧縮は下部中央に置く。四隅のハンドルはcrop枠の中央・前面UI・他のハンドルのDOM矩形を避けた最寄りの画面内の位置へ配置する。stageのpure helperとResizeObserverで配置し、表示倍率・位置・編集stateの変更でも再測定する。切り抜き枠内には現在のintentに対応する出力プレビューを重ね、再計算中は下層のソース画像が見える。状況文字は視覚的に隠し、支援技術向けの通知を維持する。
 
-初期モードはクロップである。下部の圧縮を選択すると同じメニュー内に形式のselect、画質のrange、幅・高さを表示し、画像領域はクロップから比較へ切り替える。独立した編集・比較切替や圧縮の開閉アイコンは設けない。設定内に折りたたみは設けず、小さい画面では設定本文だけをスクロールできる。Escapeはクロップへ戻し、圧縮ボタンへフォーカスを戻す。SpaceとEscapeは画像編集中に限ってwindowのcaptureで検知し、画像ドロップ直後のbodyフォーカスも対象にする。ウィンドウのフォーカスを失ったらキー保持・パンを解除する。形式selectでは、トップレベル文書で`showPicker`が利用できる場合、Space単独でのポップアップ表示をキー解放まで遅らせ、ドラッグ時は開かない。未対応ブラウザや埋め込み文書ではselectの標準キー操作を維持する。ステージのフォーカス表示はviewportの内側に描画する。
+画像の読み込みに成功すると、初回・差し替えとも圧縮モードで開く。形式のselect、画質のrange、幅・高さと、画像の比較表示をすぐに使える。下部のクロップ・傾き・反転を選ぶと切り抜き枠を表示し、圧縮を選ぶと比較表示へ切り替える。独立した編集・比較切替や圧縮の開閉アイコンは設けない。設定内に折りたたみは設けず、小さい画面では設定本文だけをスクロールできる。Escapeはクロップへ戻し、圧縮ボタンへフォーカスを戻す。SpaceとEscapeは画像編集中に限ってwindowのcaptureで検知し、画像ドロップ直後のbodyフォーカスも対象にする。ウィンドウのフォーカスを失ったらキー保持・パンを解除する。形式selectでは、トップレベル文書で`showPicker`が利用できる場合、Space単独でのポップアップ表示をキー解放まで遅らせ、ドラッグ時は開かない。未対応ブラウザや埋め込み文書ではselectの標準キー操作を維持する。ステージのフォーカス表示はviewportの内側に描画する。
 
 ## State, cache, and stale requests
 
 full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中および圧縮パネルを閉じたときはタイマーを破棄する。すでに開始したfull処理は中断せず完了まで継続するため、その間の新しいpreviewは既存schedulerの契約どおり待機する。失敗時は自動ループを止めて再試行を提示する。削減率はmetadata strip後のfull Blobと元Fileのbytesから計算し、容量が増えた場合は増加率として表示する。quickのbytesは保存容量として表示しない。
 
 1. File を受け取ると `App` は candidate として MIME を検査し、decode 完了を `fileLoadGeneration` で guard する。candidate の読み込み中・失敗時は committed source、編集、result URL、現行 preview の debounce/in-flight work を保持する。新しい選択は論理的に obsolete な export と candidate を無効化し、比較表示を解放する。
-2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。reset は candidate generation を進めて candidate を取り消し、committed source の編集だけを再処理する。
+2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。
 3. `RasterProcessor` は同じ decoded pixel object を `sourceIdentity` で認識し、初回だけ pixel buffer の copy を `sourceKey` 付きで transfer する。後続 request は cache key を渡す。
 4. `clearSource()` は source key を捨て、generation を増やし、pending Promise を reject してから Worker に clear message を送る。Worker は cache を空にし、clear より前の queued request を stale にする。
 5. Worker scheduler は active を中断せず保持するが、新世代の request は queued にできる。active が終わると旧結果は stale、次の世代の最新 request が start する。queued が置き換わると置き換えられた request も stale になる。
@@ -110,7 +112,7 @@ Chromium E2E は CDP の HTTP/WebSocket 観測と static-server request log を�
 ## Resource ownership
 
 - `decodeImageFile` は `ImageBitmap` を `finally` で close し、fallback の temporary object URL を revoke する。
-- `App` は candidate decode/commit に失敗した一時 object URL を revoke し、成功した candidate の source URL を committed source として次の成功 commit・unmount で置き換え/revoke する。rendered result の URL も次の採用・reset・unmount で revoke する。
+- `App` は candidate decode/commit に失敗した一時 object URL を revoke し、成功した candidate の source URL を committed source として次の成功 commit・unmount で置き換え/revoke する。rendered result の URL も次の採用・編集変更・unmount で revoke する。
 - `RasterProcessor.dispose()` は pending work を reject し、Worker reference を terminate する。`clearSource()` は Worker cache を世代境界で無効化する。
 - Worker の Canvas は render request の局所値として保持し、source pixel ArrayBuffer の cache と message transfer の所有を混同しない。download anchor は click 後に DOM から外す。
 

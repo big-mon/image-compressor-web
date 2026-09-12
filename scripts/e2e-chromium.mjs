@@ -1198,8 +1198,7 @@ async function runProcessorStartupFailureRegression({ allowedPaths, cdp, fixture
 
 async function clickButton(cdp, sessionId, text) {
   if (text.startsWith('保存')) {
-    await setOutputPanel(cdp,sessionId,true)
-    await waitForDom(cdp,sessionId,`!document.querySelector('.download-button').disabled`, 'save ready in compression panel')
+    await waitForDom(cdp,sessionId,`!document.querySelector('.download-button').disabled`, 'floating save ready')
   }
   const quotedText = JSON.stringify(text)
   await evaluate(cdp, sessionId, `(() => {
@@ -1253,6 +1252,8 @@ async function restoreReadySource(cdp, sessionId, filePath, description, expecte
   const before = await readPr8State(cdp, sessionId)
   await setFileInput(cdp, sessionId, filePath)
   await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(before.sourceUrl)}`, `${description} committed source`)
+  // Keep race fixtures on quick previews; initial automatic full output is tested separately.
+  await setOutputPanel(cdp,sessionId,false)
   const ready = await waitFor(async () => {
     const state = await readPr8State(cdp, sessionId)
     if (
@@ -1584,11 +1585,11 @@ async function runPreDebounceInvalidReplacementRegression({ cdp, fixturePath, in
   }
 }
 
-async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessionId, decodeSupported }) {
+async function runConcurrentDecodeEditSelectionRegression({ cdp, fixturePath, sessionId, decodeSupported }) {
   if (!decodeSupported) {
     return { reason: 'createImageBitmap is unavailable for the deterministic decode gate.', skipped: true }
   }
-  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'decode/edit/reset baseline', '16 × 32 px')
+  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'decode/edit/selection baseline', '16 × 32 px')
   try {
     const baseline = restored.ready
     const currentQuality = baseline.quality
@@ -1609,7 +1610,7 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
         return { gate, state }
       }
       throw new Error(`Concurrent decode did not remain a candidate against the retained committed preview: ${JSON.stringify({ baseline, gate, state })}`)
-    }, 'the held replacement decode before edit/reset', PR8_ASSERTION_TIMEOUT_MS)
+    }, 'the held replacement decode before edit/selection', PR8_ASSERTION_TIMEOUT_MS)
 
     await setControlValue(cdp, sessionId, '#quality', nextQuality)
     const heldWorker = await waitFor(async () => {
@@ -1619,20 +1620,21 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
         return { gate, state }
       }
       throw new Error(`Edit did not produce a held preview while decode was pending: ${JSON.stringify({ gate, state })}`)
-    }, 'the held edit preview before reset', PR8_ASSERTION_TIMEOUT_MS)
+    }, 'the held edit preview before selecting again', PR8_ASSERTION_TIMEOUT_MS)
 
-    await clickButton(cdp, sessionId, 'リセット')
-    await waitForDom(cdp, sessionId, `['left','top','width','height'].map(key => document.querySelector('.crop-rectangle')?.style[key]).join(',') === '0%,0%,100%,100%'`, 'the reset edit state while decode and Worker work are pending')
-    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The held edit Worker request was not released after reset.')
-    assert(await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.release()') === true, 'The held replacement decode was not released after reset.')
+    await setFileInput(cdp, sessionId, fixturePath)
+    await waitForDom(cdp, sessionId, `document.querySelector('.stage-image').src !== ${JSON.stringify(baseline.sourceUrl)}`, 'the latest selection while decode and Worker work are pending')
+    const selectedSourceUrl = await evaluate(cdp, sessionId, `document.querySelector('.stage-image').src`)
+    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The held edit Worker request was not released after selecting again.')
+    assert(await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.release()') === true, 'The held replacement decode was not released after selecting again.')
 
     const recovered = await waitFor(async () => {
       const state = await readPr8State(cdp, sessionId)
-      if (state.status === 'プレビュー準備完了' && state.busy === false && state.pending === false && state.previewUrl.startsWith('blob:') && state.sourceUrl === baseline.sourceUrl && state.sourceDimensions === '16 × 32 px' && state.previewNaturalWidth === 16 && state.previewNaturalHeight === 32) {
+      if (state.status === 'プレビュー準備完了' && state.busy === false && state.pending === false && state.previewUrl.startsWith('blob:') && state.sourceUrl === selectedSourceUrl && state.sourceDimensions === '16 × 32 px' && state.previewNaturalWidth === 16 && state.previewNaturalHeight === 32) {
         return state
       }
-      throw new Error(`Reset did not win the concurrent decode/edit race: ${JSON.stringify({ baseline, heldDecode, heldWorker, state })}`)
-    }, 'the current preview after concurrent decode/edit/reset', PR8_ASSERTION_TIMEOUT_MS)
+      throw new Error(`The latest selection did not win the concurrent decode/edit race: ${JSON.stringify({ baseline, heldDecode, heldWorker, state })}`)
+    }, 'the current preview after concurrent decode/edit/selection', PR8_ASSERTION_TIMEOUT_MS)
     return { baseline, heldDecode, heldWorker, recovered }
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
@@ -1822,11 +1824,16 @@ async function zoomCanvas(cdp, sessionId, target) {
   assert(await evaluate(cdp,sessionId,`document.querySelector('.zoom-controls output').textContent==='${Math.round(target*100)}%'`),'Wheel zoom must update the visible percentage.')
 }
 
+async function assertComparisonFit(cdp, sessionId) {
+  await waitForDom(cdp,sessionId,`(()=>{const r=document.querySelector('.comparison-viewport').getBoundingClientRect();return !document.querySelector('#output-panel').hidden && r.width>0 && r.height>0 && r.left>=-1 && r.top>=-1 && r.right<=innerWidth+1 && r.bottom<=innerHeight+1 && (Math.abs(r.width-innerWidth)<1 || Math.abs(r.height-innerHeight)<1) && Math.abs(r.x+r.width/2-innerWidth/2)<1 && Math.abs(r.y+r.height/2-innerHeight/2)<1 && document.querySelector('.zoom-controls output').textContent===Math.round(Number(document.querySelector('.editor-column').dataset.viewZoom)*100)+'%'})()`, 'comparison fills one viewport axis without clipping')
+}
+
 async function assertZoomControls(cdp, sessionId) {
   await installWorkerProcessGate(cdp,sessionId)
   for (const [mode, input] of [[0,'mouse'],[1,'keyboard'],[2,'touch']]) {
     await evaluate(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[${mode}].click()`)
     await waitForFullOutput(cdp,sessionId)
+    await zoomCanvas(cdp,sessionId,1)
     const before=await evaluate(cdp,sessionId,`({crop:document.querySelector('.crop-rectangle').style.cssText,url:document.querySelector('.processed-preview').src,width:document.querySelector('#resize-width').value,height:document.querySelector('#resize-height').value,requests:window.__e2eWorkerProcessGate.requests.length,split:document.querySelector('#comparison-split').value})`)
     for (const [label, percent] of [['拡大','122%'],['縮小','100%']]) {
       const selector=`.zoom-controls button[aria-label="${label}"]`
@@ -1871,13 +1878,16 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   await setOutputPanel(cdp, sessionId, panelOpen)
   const layout=await evaluate(cdp,sessionId,`(()=>{
     const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON()
-    const controls=[...document.querySelectorAll('.image-actions button,.change-image-button,.zoom-controls button,.edit-modes button')]
-    return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),actions:rect('.image-actions'),zoom:rect('.zoom-controls'),
+    const controls=[...document.querySelectorAll('.change-image-button,.zoom-controls button,.edit-modes button,.download-button')]
+    return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),actions:rect('.image-actions'),zoom:rect('.zoom-controls'),zoomValue:rect('.zoom-controls output'),
       zoomOrder:[...document.querySelector('.zoom-controls').children].map(e=>e.getAttribute('aria-label')),
+      changeIcon:!!document.querySelector('.change-image-button[aria-label="画像を変更"][title="画像を変更"] svg[aria-hidden="true"]') && document.querySelector('.change-image-button').textContent.trim()==='',
+      result:rect('.compression-result'),resultInMenu:!!document.querySelector('.compression-result').closest('#output-panel,.editor-bottom'),
+      error:document.querySelector('.error-message')?.getBoundingClientRect().toJSON(),
       scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
       controls:controls.map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}}),
       cropHidden:document.querySelector('.stage-area').hidden,compareHidden:document.querySelector('.comparison-section').hidden,
-      obsolete:!!document.querySelector('.view-switch,.output-menu,header,footer'),
+      obsolete:!!document.querySelector('.view-switch,.output-menu,header,footer,.image-actions button'),
       handles:[...document.querySelectorAll('.crop-handle')].map(h=>{const r=h.getBoundingClientRect();return h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})}
   })()`)
   assert(layout.shell.height===viewport.height && layout.editor.width===viewport.width && layout.editor.height===viewport.height,'Canvas must fill viewport.')
@@ -1885,13 +1895,19 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(!layout.obsolete && layout.cropHidden===panelOpen && layout.compareHidden!==panelOpen,'Compression must select comparison without separate modes.')
   assert(Math.abs(layout.bottom.x+layout.bottom.width/2-viewport.width/2)<1 && layout.bottom.y>=0 && layout.bottom.bottom<=viewport.height,'Bottom menu must stay centred and within viewport.')
   assert(layout.controls.every(b=>b.width>=44&&b.height>=44&&b.hit),'Overlay buttons must remain reachable: '+JSON.stringify(layout))
-  assert(layout.zoom.x>=layout.actions.right && layout.zoom.right<=viewport.width && layout.zoom.y>=0 && layout.zoom.bottom<=viewport.height && layout.zoomOrder.join(',')==='縮小,現在の拡大率,拡大','Zoom readout must sit between minus and plus without overlapping image actions: '+JSON.stringify(layout))
+  assert(layout.changeIcon,'Image selection must use an icon with an accessible name.')
+  assert(Math.abs(layout.zoomValue.x+layout.zoomValue.width/2-viewport.width/2)<1 && layout.zoom.x>=0 && layout.zoom.right<=viewport.width && layout.zoom.y>=0 && layout.zoom.bottom<=viewport.height && layout.zoomOrder.join(',')==='縮小,現在の拡大率,拡大','Zoom readout must be centred on the viewport between minus and plus: '+JSON.stringify(layout))
+  assert(layout.zoom.x>=layout.actions.right || layout.zoom.y>=layout.actions.bottom,'Zoom controls must not overlap image actions: '+JSON.stringify(layout))
+  assert(layout.bottom.y>=Math.max(layout.actions.bottom,layout.zoom.bottom)+8,'Bottom menu must leave the full upper controls visible: '+JSON.stringify(layout))
+  assert(!layout.resultInMenu && layout.result.x>=0 && layout.result.y>=0 && viewport.width-layout.result.right>=0 && viewport.width-layout.result.right<=16 && viewport.height-layout.result.bottom>=0 && viewport.height-layout.result.bottom<=16,'Save and reduction must float at the bottom right: '+JSON.stringify(layout))
+  assert(layout.result.x>=layout.bottom.right || layout.result.y>=layout.bottom.bottom,'Save controls must not overlap the bottom menu: '+JSON.stringify(layout))
+  assert(!layout.error || layout.error.bottom<=layout.result.y,'Save controls must not cover errors: '+JSON.stringify(layout))
+  assert(await evaluate(cdp,sessionId,`(()=>{const b=document.querySelector('.download-button').getBoundingClientRect(),r=document.querySelector('.reduction-line').getBoundingClientRect();return r.right<=b.left&&r.top<b.bottom&&r.bottom>b.top})()`),'Save must remain beside reduction.')
   if(!panelOpen) assert(layout.handles.length===4 && layout.handles.every(Boolean),'All four handles must remain reachable: '+JSON.stringify(layout))
   if(panelOpen) {
-    for(const selector of ['#output-format','#resize-height','.download-button']) {
+    for(const selector of ['#output-format','#resize-height']) {
       assert(await evaluate(cdp,sessionId,`(()=>{const b=document.querySelector('${selector}');b.scrollIntoView({block:'nearest'});const r=b.getBoundingClientRect();return b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})()`),'Compression control unreachable: '+selector)
     }
-    assert(await evaluate(cdp,sessionId,`(()=>{const b=document.querySelector('.download-button').getBoundingClientRect(),r=document.querySelector('.reduction-line').getBoundingClientRect();return r.right<=b.left&&r.top<b.bottom&&r.bottom>b.top})()`),'Save must remain beside reduction.')
     await evaluate(cdp,sessionId,`document.querySelector('#output-panel').scrollTop=0`)
   }
   return layout
@@ -1947,6 +1963,64 @@ async function assertTransformedPixels(cdp, sessionId, { rotation, straighten, f
   return result
 }
 
+async function assertStraightenRuler(cdp, sessionId) {
+  await clickButton(cdp,sessionId,'傾き・反転')
+  const ruler = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect();return {x:r.x+r.width/2+60,y:r.y+r.height/2}})()`)
+  const expectAngle = async value => {
+    await waitForDom(cdp,sessionId,`Number(document.querySelector('#straighten').value)===${value} && document.querySelector('output[for=straighten]').textContent==='${value.toFixed(1)}°'`, 'ruler angle '+value)
+    assert(await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect(),m=document.querySelector('.straighten-indicator').getBoundingClientRect(),z=document.querySelector('.straighten-tick.is-zero').getBoundingClientRect();return Math.abs(m.x+m.width/2-r.x-r.width/2)<1 && Math.abs(z.x+z.width/2-(m.x+m.width/2)+${value}*8)<1})()`),'Ruler scale must move beneath the fixed central marker.')
+  }
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...ruler,button:'left',clickCount:1},sessionId)
+  await expectAngle(0) // Grabbing away from the marker must not jump the angle.
+  for (const [offset,angle] of [[48,-6],[1200,-45],[1192,-44],[-1200,45],[-1192,44]]) {
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:ruler.x+offset,y:ruler.y-60,button:'left',buttons:1},sessionId)
+    await expectAngle(angle) // Capture outside the ruler; reverse immediately at either limit.
+  }
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...ruler,button:'left',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:ruler.x+30,y:ruler.y},sessionId)
+  await expectAngle(44)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...ruler,button:'left',clickCount:1},sessionId)
+  await evaluate(cdp,sessionId,`window.dispatchEvent(new Event('blur'))`)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:ruler.x+30,y:ruler.y,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...ruler,button:'left',clickCount:1},sessionId)
+  await expectAngle(44)
+
+  await evaluate(cdp,sessionId,`document.querySelector('#straighten').focus()`)
+  for (const [key,keyCode,angle] of [['Home',36,-45],['ArrowRight',39,-44.9],['End',35,45],['ArrowLeft',37,44.9]]) {
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:keyCode},sessionId)
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:keyCode},sessionId)
+    await expectAngle(angle)
+  }
+  assert(await evaluate(cdp,sessionId,`getComputedStyle(document.querySelector('.straighten-ruler')).outlineStyle==='solid' && document.querySelector('#straighten').labels[0].textContent==='傾き' && document.querySelector('#straighten').getAttribute('aria-valuetext')==='44.9度'`),'Native keyboard input must retain its label, angle and visible focus outline.')
+  await clickButton(cdp,sessionId,'傾きを0°に戻す')
+  await expectAngle(0)
+
+  await setViewport(cdp,sessionId,MOBILE_VIEWPORT)
+  const touch = await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch]},sessionId)
+  await expectAngle(0)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:touch.x-40,y:touch.y}]},sessionId)
+  await expectAngle(5)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchCancel',touchPoints:[]},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[touch]},sessionId)
+  await expectAngle(5)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:touch.x+8,y:touch.y}]},sessionId)
+  await expectAngle(4)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId)
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
+  await captureScreenshot(cdp,sessionId,'straighten-ruler-touch.png')
+  await waitForDom(cdp,sessionId,`document.querySelector('.processed-preview')?.dataset.previewKind==='quick' && !document.querySelector('.download-button').disabled`, 'straighten quick preview without a full calculation')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.reduction-line strong').textContent==='削減率は未計算'`),'An idle straighten mode must not announce an unscheduled full calculation.')
+
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...touch,button:'left',clickCount:1},sessionId)
+  await clickButton(cdp,sessionId,'圧縮')
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:touch.x-40,y:touch.y,button:'left',buttons:1},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...touch,button:'left',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`Number(document.querySelector('#straighten').value)===4`),'A hidden ruler must not continue editing after switching mode.')
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+}
+
 async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath, cropDragFixturePath, corruptFixturePath, unsupportedFixturePath, downloadDirectory, pageUrl, origin, requestLog, targetId, sourceFamilies, sourceOrientation }) {
   const diagnostics = new BrowserDiagnostics(cdp, sessionId)
   const network = new NetworkRecorder(cdp, sessionId)
@@ -1968,9 +2042,9 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.editor-column')?.dataset.viewZoom === '1' && document.querySelector('.zoom-controls output')?.textContent === '100%' && document.querySelector('#output-panel')?.hidden === true`, 'initial crop mode at 100 percent')
-  await setOutputPanel(cdp,sessionId,true)
-  await waitForFullOutput(cdp, sessionId)
+  await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === false && document.querySelector('[data-mode=compress]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('.stage-area')?.hidden === true && document.querySelector('.comparison-section')?.hidden === false`, 'initial compression mode')
+  await assertComparisonFit(cdp,sessionId)
+  await waitForDom(cdp,sessionId,`document.querySelector('.processed-preview')?.dataset.previewKind === 'full' && !document.querySelector('.download-button').disabled`, 'automatic full output without selecting compression')
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
   assert(await evaluate(cdp,sessionId,`document.querySelector('[data-mode=compress]').textContent==='圧縮' && !document.querySelector('#output-panel details,#output-panel summary,.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must show controls without accordion sections.')
   assert(await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),f=p.querySelector('#output-format'),l=p.querySelector('label[for="quality"]'),r=p.querySelector('#quality'),w=p.querySelector('#resize-width'),h=p.querySelector('#resize-height');return f&&l&&r&&w&&h&&[f,r,w,h].every(e=>e.checkVisibility())&&f.getBoundingClientRect().bottom<=l.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=w.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=h.getBoundingClientRect().top&&parseFloat(getComputedStyle(r.parentElement).rowGap)<=3})()`),'Format, quality, width and height must initially be visible in order with a compact label-to-slider gap.')
@@ -1982,22 +2056,31 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp, sessionId, `document.querySelector('.processed-preview')?.dataset.previewKind === 'quick' && !document.querySelector('.download-button')?.disabled`, 'quick preview after closing output settings')
   await delay(800)
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).every(r => r.preview)`), 'Closing the panel did not cancel the pending automatic full encode.')
-  await clickButton(cdp, sessionId, '保存 .')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.reduction-line strong').textContent==='削減率は未計算'`),'An idle crop must not announce an unscheduled full calculation.')
+  await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.arm(false)')
+  const savePoint=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.download-button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[savePoint]},sessionId)
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId)
+  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
+  await waitForDom(cdp,sessionId,`window.__e2eWorkerProcessGate.held && document.querySelector('.reduction-line strong').textContent==='計算中…'`, 'saving outside compression announces the pending full calculation')
+  await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.release()')
   await waitForFullOutput(cdp, sessionId)
   await waitForDownloadedFile(downloadDirectory, 'e2e-metadata-fixture-edited.jpg')
-  assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).filter(r => !r.preview).length === 1`), 'Saving after reopening compression must encode exactly once.')
+  assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.slice(${requestCount}).filter(r => !r.preview).length === 1`), 'Saving outside compression must encode exactly once.')
   assert(await evaluate(cdp, sessionId, `document.querySelector('.stage-image').naturalWidth === 16 && document.querySelector('.stage-image').naturalHeight === 32`), 'EXIF orientation was not normalized.')
-  assert(await evaluate(cdp, sessionId, `!document.querySelector('#output-panel').hidden`), 'Saving must keep compression visible.')
+  assert(await evaluate(cdp, sessionId, `document.querySelector('#output-panel').hidden`), 'Saving must preserve the selected crop mode.')
   const layouts = []
-  for (const viewport of [...TABLET_VIEWPORTS,DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
+  for (const viewport of [...TABLET_VIEWPORTS,DESKTOP_VIEWPORT,...[1216,1217].map(width=>({...DESKTOP_VIEWPORT,width})),MOBILE_VIEWPORT,...[320,479,480].map(width=>({...MOBILE_VIEWPORT,width,height:568})),{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
     for(const open of [false,true]) {
       layouts.push(await assertEditorLayout(cdp,sessionId,viewport,open))
+      if(open) await assertComparisonFit(cdp,sessionId)
       await captureScreenshot(cdp,sessionId,`editor-${viewport.width}-${viewport.height}-${open?'output':'crop'}.png`)
     }
   }
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await setOutputPanel(cdp,sessionId,true)
-  for (const selector of [null, '[data-mode=compress]', '#comparison-split', '#output-format', '#resize-width', '.change-image-button']) {
+  for (const selector of [null, '[data-mode=compress]', '#comparison-split', '#output-format', '#resize-width', '.change-image-button', '.download-button']) {
     await setOutputPanel(cdp,sessionId,true)
     await evaluate(cdp,sessionId,selector ? `document.querySelector('${selector}').focus()` : `document.activeElement.blur()`)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
@@ -2006,10 +2089,13 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await setOutputPanel(cdp,sessionId,true)
 
+  await assertStraightenRuler(cdp,sessionId)
   // PNG oracle fixture with asymmetric colored cells (large enough for reduced preview).
   const png = await evaluate(cdp,sessionId,`(() => {const c=document.createElement('canvas');c.width=1000;c.height=600;const x=c.getContext('2d');for(let y=0;y<600;y+=20) for(let z=0;z<1000;z+=20){x.fillStyle='rgb('+((z*7+y)%256)+','+((y*3+z)%256)+','+((z+y*5)%256)+')';x.fillRect(z,y,20,20)}return c.toDataURL().split(',')[1]})()`)
   await writeFile(cropDragFixturePath,Buffer.from(png,'base64'))
+  await setOutputPanel(cdp,sessionId,false)
   await setFileInput(cdp,sessionId,cropDragFixturePath)
+  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image')?.naturalWidth===1000 && document.querySelector('[data-mode=compress]').getAttribute('aria-pressed')==='true' && !document.querySelector('#output-panel').hidden`, 'file selection switches crop to compression')
   await waitForFullOutput(cdp,sessionId)
   await setControlValue(cdp,sessionId,'#output-format','image/png')
   await waitForFullOutput(cdp,sessionId)
@@ -2029,10 +2115,11 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(pixels[1].transparent===0,'Extreme straightening introduced transparent corners.')
   await captureScreenshot(cdp,sessionId,'editor-straighten.png')
 
-  for (const viewport of [DESKTOP_VIEWPORT, MOBILE_VIEWPORT, {...MOBILE_VIEWPORT,width:667,height:375}]) {
+  for (const viewport of [...TABLET_VIEWPORTS, DESKTOP_VIEWPORT, MOBILE_VIEWPORT, {...MOBILE_VIEWPORT,width:320,height:568}, {...MOBILE_VIEWPORT,width:667,height:375}]) {
     await setViewport(cdp,sessionId,viewport)
     const controls = await evaluate(cdp,sessionId,`(()=>{const slider=document.querySelector('.straighten-control').getBoundingClientRect(),icons=document.querySelector('.transform-buttons').getBoundingClientRect();return {sliderBottom:slider.bottom,iconsTop:icons.top,iconsBottom:icons.bottom,buttons:[...document.querySelectorAll('.transform-buttons button')].map(b=>({label:b.getAttribute('aria-label'),text:b.textContent.trim(),w:b.getBoundingClientRect().width,h:b.getBoundingClientRect().height})),cropVisible:document.querySelector('.crop-rectangle').getBoundingClientRect().height>0}})()`)
     assert(controls.iconsTop>=controls.sliderBottom && controls.iconsBottom<=viewport.height && controls.cropVisible && controls.buttons.every(b=>b.label && !b.text && b.w>=44 && b.h>=44),'Transform controls must be separate rows with accessible icons: '+JSON.stringify(controls))
+    assert(await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.straighten-ruler').getBoundingClientRect(),b=document.querySelector('.editor-bottom').getBoundingClientRect(),z=document.querySelector('.zoom-controls').getBoundingClientRect(),s=document.querySelector('.compression-result').getBoundingClientRect();return r.height>=44 && r.left>=0 && r.right<=innerWidth && b.top>=z.bottom+8 && !(b.left<s.right && b.right>s.left && b.top<s.bottom && b.bottom>s.top) && document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===document.querySelector('.straighten-ruler') && document.documentElement.scrollHeight===innerHeight})()`),'Ruler must remain reachable without overlapping zoom/save or causing page scrolling.')
     await assertStraightenedStage(cdp,sessionId)
     await captureScreenshot(cdp,sessionId,`icon-controls-${viewport.width}.png`)
   }
@@ -2181,21 +2268,28 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(capacity.bytes===expectedBytes.length && capacity.reduction===Math.abs(expectedReduction).toFixed(1)+'% '+(expectedReduction>=0?'削減':'増加'),'Reduction does not reflect the full Blob.')
   await installWorkerProcessGate(cdp,sessionId)
   await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.arm()')
-  await clickButton(cdp,sessionId,'保存 .')
+  await clickButton(cdp,sessionId,'傾き・反転')
+  await evaluate(cdp,sessionId,`document.querySelector('.download-button').focus()`)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
   const downloadPath=await waitForDownloadedFile(downloadDirectory,'e2e-crop-drag-edited.jpg')
   assert((await readFile(downloadPath)).equals(expectedBytes),'Download did not reuse the measured Blob.')
   assert(!(await readWorkerProcessGate(cdp,sessionId)).held,'Saving an existing full result launched another encode.')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.transform-controls').hidden===false`),'Keyboard save must preserve transform mode.')
   await evaluate(cdp,sessionId,'window.__e2eWorkerProcessGate.disarm()')
   assert(Object.values(detectMetadataFamilies(expectedBytes)).every(v=>!v),'Output metadata remained.')
 
   // Invalid replacements retain the committed image and completed full result.
   for(const invalid of [corruptFixturePath,unsupportedFixturePath]) {
+    await setOutputPanel(cdp,sessionId,false)
     const before=await readPr8State(cdp,sessionId)
     await setFileInput(cdp,sessionId,invalid)
     await waitForDom(cdp,sessionId,`document.querySelector('.error-message') !== null && !document.querySelector('.download-button').disabled`,'invalid replacement settles')
     const after=await readPr8State(cdp,sessionId)
     assert(after.sourceUrl===before.sourceUrl && after.previewUrl===before.previewUrl,'Invalid replacement discarded committed image/result.')
+    assert(await evaluate(cdp,sessionId,`document.querySelector('#output-panel').hidden && !document.querySelector('.stage-area').hidden`),'Invalid replacement must preserve the current mode.')
   }
+  await setOutputPanel(cdp,sessionId,true)
 
   // Hold old preview or full output; a newer intent must win even after release.
   const races=[]
@@ -2203,6 +2297,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await evaluate(cdp,sessionId,`window.__e2eWorkerProcessGate.arm(${preview})`)
     await setControlValue(cdp,sessionId,'#quality',preview?'0.61':'0.62')
     await waitForDom(cdp,sessionId,`window.__e2eWorkerProcessGate.held`,'held old render')
+    assert(await evaluate(cdp,sessionId,`document.querySelector('.reduction-line strong').textContent==='${preview ? '削減率は未計算' : '計算中…'}'`),'Only a pending full job may announce reduction calculation.')
     await setControlValue(cdp,sessionId,'#quality',preview?'0.71':'0.72')
     await waitForFullOutput(cdp,sessionId)
     const current=await readPr8State(cdp,sessionId)
@@ -2225,13 +2320,16 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp,sessionId,`document.querySelector('.verify-output-button') !== null && !document.querySelector('.status-chip').classList.contains('is-busy')`,'recoverable full error')
   await delay(700)
   assert(await evaluate(cdp,sessionId,`document.querySelector('.reduction-line strong').textContent==='計算できませんでした'`),'Failed output was presented as measured.')
+  await assertEditorLayout(cdp,sessionId,{...MOBILE_VIEWPORT,width:320,height:568},true)
+  await captureScreenshot(cdp,sessionId,'floating-save-error-mobile.png')
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
   await clickButton(cdp,sessionId,'容量計算を再試行')
   await waitForFullOutput(cdp,sessionId)
 
-  // Retain deterministic decode, reset and invalid-file/preview race regressions.
+  // Retain deterministic decode, selection and invalid-file/preview race regressions.
   await installDecodeGate(cdp,sessionId)
   await runLatestCandidateOrderingRegression({cdp,sessionId,cropDragFixturePath,fixturePath,decodeSupported:true})
-  await runConcurrentDecodeEditResetRegression({cdp,sessionId,fixturePath,decodeSupported:true})
+  await runConcurrentDecodeEditSelectionRegression({cdp,sessionId,fixturePath,decodeSupported:true})
   await runNoopOutputInvalidationRegression({cdp,sessionId,fixturePath,selector:'#quality',valueKey:'quality',label:'same quality'})
   await runNoopOutputInvalidationRegression({cdp,sessionId,fixturePath,selector:'#output-format',valueKey:'outputMime',label:'same MIME'})
   await runCancelledExportEditRegression({cdp,sessionId,fixturePath,downloadDirectory})
@@ -2246,13 +2344,46 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
 
   // Start with an actual drop while no editor control owns focus.
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await clickButton(cdp,sessionId,'傾き・反転')
   await evaluate(cdp,sessionId,`document.activeElement.blur()`)
   await dispatchFileDrop(cdp,sessionId,'.change-image-button',cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-surface').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1'`),'New source must start at 100 percent.')
+  await assertComparisonFit(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('[data-mode=compress]').getAttribute('aria-pressed')==='true' && document.querySelector('.stage-area').hidden`),'Dropped replacement must start in fitted compression.')
+  await clickButton(cdp,sessionId,'クロップ')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom==='1'`),'A new image must still start editing at 100 percent.')
+  await zoomCanvas(cdp,sessionId,2)
+  await clickButton(cdp,sessionId,'圧縮')
+  await assertComparisonFit(cdp,sessionId)
+  await installWorkerProcessGate(cdp,sessionId)
+  const beforeFit = await evaluate(cdp,sessionId,`({crop:document.querySelector('.crop-rectangle').style.cssText,url:document.querySelector('.processed-preview').src,requests:window.__e2eWorkerProcessGate.requests.length})`)
+  for (const viewport of [...TABLET_VIEWPORTS,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375},DESKTOP_VIEWPORT]) {
+    await setViewport(cdp,sessionId,viewport)
+    await assertComparisonFit(cdp,sessionId)
+    await captureScreenshot(cdp,sessionId,`comparison-fit-${viewport.width}-${viewport.height}.png`)
+  }
+  await delay(800)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(beforeFit.crop)} && document.querySelector('.processed-preview').src===${JSON.stringify(beforeFit.url)} && window.__e2eWorkerProcessGate.requests.length===${beforeFit.requests}`),'Fitting must not change the crop or re-encode the image.')
+  await zoomCanvas(cdp,sessionId,3)
+  await setControlValue(cdp,sessionId,'#quality','0.73')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-3)<0.001`),'Quality edits and quick/full replacement must preserve manual comparison zoom.')
+  await setControlValue(cdp,sessionId,'#resize-width','500')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-3)<0.001`),'Output resizing must preserve the comparison scale.')
+  await setControlValue(cdp,sessionId,'#resize-width','')
+  await waitForFullOutput(cdp,sessionId)
+  await clickButton(cdp,sessionId,'圧縮')
+  await assertComparisonFit(cdp,sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'middle',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:620,y:310,button:'middle',buttons:4},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:620,y:310,button:'middle',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-2)<0.001 && document.querySelector('#output-panel').hidden && document.querySelector('.crop-surface').style.transform==='translate(0px, 0px)'`),'Returning from compression must restore the editing view and stop the previous pan.')
   await assertZoomControls(cdp,sessionId)
   // Space drag must work with focus on sibling UI, without editing or activating it on release.
-  for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[false,'.zoom-controls button:first-child'],[true,'.zoom-controls button:last-child'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
+  for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[false,'.download-button'],[true,'.download-button'],[false,'.zoom-controls button:first-child'],[true,'.zoom-controls button:last-child'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
     await setOutputPanel(cdp,sessionId,compress)
     await evaluate(cdp,sessionId,selector ? `document.querySelector('${selector}').focus()` : `document.activeElement.blur()`)
     if (!selector) assert(await evaluate(cdp,sessionId,`document.activeElement===document.body`),'No-focus case must really target the document body.')
@@ -2265,7 +2396,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:625,y:310,button:'left',buttons:1},sessionId)
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:625,y:310,button:'left',clickCount:1},sessionId)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
-    await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan from '+selector)
+    await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan in '+(compress?'compression':'crop')+' from '+selector+' starting '+JSON.stringify(before))
     assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(before.crop)} && document.querySelector('#comparison-split').value===${JSON.stringify(before.split)} && document.querySelector('.processed-preview').src===${JSON.stringify(before.url)} && document.querySelector('#output-panel').hidden===${!compress}`),'Space pan changed the edit, comparison or selected mode: '+selector)
     assert(await evaluate(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom===${JSON.stringify(before.zoom)}`),'Space pan must not activate a focused zoom button on release.')
   }
@@ -2331,6 +2462,23 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===0`),'Image change must wait for Space release to allow panning.')
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
   assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===1`),'Standalone Space must still open image selection.')
+  for(const input of ['mouse','touch','Enter']) {
+    await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks=0;document.querySelector('#image-input').addEventListener('click',event=>{event.preventDefault();window.__e2eImageChangeClicks++},{once:true});document.querySelector('.change-image-button').focus()`)
+    const point=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.change-image-button svg').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+    if(input==='mouse') {
+      await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
+    } else if(input==='touch') {
+      await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]},sessionId)
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId)
+      await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
+    } else {
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId)
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId)
+    }
+    await waitForDom(cdp,sessionId,`window.__e2eImageChangeClicks===1`,input+' activates image selection from the icon')
+  }
   await clickButton(cdp,sessionId,'クロップ')
   await zoomCanvas(cdp,sessionId,2)
   await evaluate(cdp,sessionId,`document.querySelector('.zoom-controls button:last-child').focus()`)
@@ -2430,6 +2578,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await writeFile(panoramaPath,Buffer.from(panoramaPng,'base64'))
   await setFileInput(cdp,sessionId,panoramaPath)
   await waitForDom(cdp,sessionId,`document.querySelector('.stage-image')?.naturalWidth===12000 && document.querySelector('.processed-preview')?.dataset.previewKind==='quick' && !document.querySelector('.download-button').disabled`, 'panorama quick preview')
+  await assertComparisonFit(cdp,sessionId)
   await setControlValue(cdp,sessionId,'#output-format','image/png')
   await setControlValue(cdp,sessionId,'#resize-width','2048')
   await clickButton(cdp,sessionId,'傾き・反転')
@@ -2437,6 +2586,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp,sessionId,`document.querySelector('.processed-preview')?.naturalWidth===960 && !document.querySelector('.download-button').disabled`, 'straightened panorama quick crop')
   await setOutputPanel(cdp,sessionId,true)
   await waitForFullOutput(cdp,sessionId)
+  await assertComparisonFit(cdp,sessionId)
   const panorama = await evaluate(cdp,sessionId,`(async()=>{const img=document.querySelector('.processed-preview');await img.decode();const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;const x=c.getContext('2d');x.drawImage(img,0,0);const bytes=x.getImageData(0,0,c.width,c.height).data;let empty=0;for(let i=3;i<bytes.length;i+=4)if(bytes[i]===0)empty++;return {width:c.width,height:c.height,empty,center:[...x.getImageData(c.width/2,c.height/2,1,1).data]}})()`)
   assert(panorama.width===2048 && panorama.height===171 && panorama.empty===0 && panorama.center.join(',')==='60,120,180,255', 'Panorama full crop failed: '+JSON.stringify(panorama))
 

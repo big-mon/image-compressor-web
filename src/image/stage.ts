@@ -51,9 +51,15 @@ export function placeCropHandle(
 
 export interface ViewTransform { zoom: number; x: number; y: number }
 
+/** Contain the complete comparison crop in the viewport, including small images. */
+export function fitView(image: Size, viewport: Size): ViewTransform {
+  return { zoom: Math.min(viewport.width / image.width, viewport.height / image.height), x: 0, y: 0 }
+}
+
 /** Zoom about a screen point relative to the viewport centre; never changes the image edit. */
-export function zoomView(view: ViewTransform, delta: number, point: { x: number; y: number }): ViewTransform {
-  const zoom = Math.max(0.01, Math.min(16, view.zoom * Math.exp(-Math.max(-1000, Math.min(1000, delta)) * 0.002)))
+export function zoomView(view: ViewTransform, delta: number, point: { x: number; y: number }, fitZoom = 1): ViewTransform {
+  // Keep a fitted tiny/large image reachable beyond the usual manual zoom limits.
+  const zoom = Math.max(Math.min(0.01, fitZoom), Math.min(Math.max(16, fitZoom), view.zoom * Math.exp(-Math.max(-1000, Math.min(1000, delta)) * 0.002)))
   const ratio = zoom / view.zoom
   return { zoom, x: point.x - (point.x - view.x) * ratio, y: point.y - (point.y - view.y) * ratio }
 }

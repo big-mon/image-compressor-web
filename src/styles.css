@@ -137,11 +137,12 @@ figure {
 
 .change-image-button {
   display: inline-flex;
+  width: 2.75rem;
   min-height: 2.75rem;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  padding: 0.5rem 0.9rem;
+  padding: 0;
   border: 1px solid #6b988d;
   border-radius: 0.6rem;
   background: var(--panel-raised);
@@ -745,7 +746,6 @@ input[type="range"] {
 }
 
 .secondary-button,
-.text-button,
 .download-button {
   min-height: 2.75rem;
   border-radius: 0.6rem;
@@ -763,17 +763,6 @@ input[type="range"] {
 .secondary-button.is-selected {
   border-color: #6b988d;
   background: #1d3832;
-}
-
-.text-button {
-  padding: 0.5rem 0.25rem;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-}
-
-.text-button:hover {
-  color: var(--text);
 }
 
 .output-card {
@@ -981,16 +970,16 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   overflow: hidden;
   background: #101010;
 }
-.image-actions { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: max(0.5rem, env(safe-area-inset-left)); display: flex; gap: 0.5rem; }
-.image-actions button, .image-actions .change-image-button { background-color: var(--panel); }
-.zoom-controls { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); right: max(0.5rem, env(safe-area-inset-right)); display: flex; align-items: center; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
+.image-actions { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: max(0.5rem, env(safe-area-inset-left)); display: flex; }
+.image-actions .change-image-button { background-color: var(--panel); }
+.zoom-controls { position: fixed; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
 .zoom-controls button { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 0.7rem; background: transparent; }
 .zoom-controls button:hover:not(:disabled) { background: var(--panel-raised); }
 .zoom-controls button:focus-visible { outline-offset: -3px; }
 .zoom-controls button:disabled { opacity: 0.4; cursor: default; }
-.zoom-controls svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.change-image-button svg, .zoom-controls svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .zoom-controls output { width: 3rem; text-align: center; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
-.editor-shell .download-button { width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
+.editor-shell .download-button { flex: none; width: auto; min-width: 6rem; margin: 0; padding: 0.5rem 1rem; }
 .editor-shell .download-button span { font-size: 0.8rem; }
 .editor-shell .workspace {
   position: relative;
@@ -1068,7 +1057,18 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 .crop-controls { flex-wrap: wrap; }
 .crop-controls .field-help { display: none; }
 .transform-controls { flex-direction: column; gap: 0.35rem; }
-.straighten-control { width: min(28rem, 100%); }
+.straighten-control { width: min(28rem, 100%); gap: 0.15rem; }
+.straighten-control .range-label { justify-content: center; }
+.straighten-ruler { position: relative; width: 100%; height: 2.75rem; overflow: hidden; border-radius: 0.25rem; touch-action: none; user-select: none; cursor: ew-resize; }
+.straighten-ruler:has(:focus-visible) { outline: 2px solid var(--mint); outline-offset: 2px; }
+.straighten-ruler input { pointer-events: none; }
+.straighten-ruler::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, var(--panel), transparent 12%, transparent 88%, var(--panel)); }
+.straighten-scale { position: absolute; left: 50%; top: 0; height: 100%; pointer-events: none; }
+.straighten-tick { position: absolute; top: 10px; width: 1px; height: 10px; transform: translateX(-50%); background: var(--muted); }
+.straighten-tick.is-major { top: 5px; height: 15px; background: var(--soft); }
+.straighten-tick.is-zero { background: var(--mint); }
+.straighten-tick > span { position: absolute; top: 19px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 0.65rem; font-variant-numeric: tabular-nums; }
+.straighten-indicator { position: absolute; top: 0; left: 50%; width: 2px; height: 24px; transform: translateX(-50%); border-radius: 1px; background: var(--mint); pointer-events: none; }
 .transform-buttons { display: flex; gap: 0.5rem; }
 .edit-modes { display: flex; justify-content: center; gap: 1.5rem; margin-top: 0.5rem; }
 .edit-modes button { display: grid; justify-items: center; gap: 0.25rem; min-width: 6.5rem; font-size: 0.8rem; }
@@ -1082,8 +1082,6 @@ input[type="range"] { min-height: 2.75rem; }
 input[type="number"], select { background-color: #101010; }
 .secondary-button:hover, .secondary-button.is-selected { background: #302a19; border-color: var(--mint); }
 @media (max-width: 767px) {
-  .image-actions { gap: 0.3rem; }
-  .image-actions button, .image-actions .change-image-button { padding: 0.45rem 0.5rem; font-size: 0.8rem; }
   .editor-shell .download-button { min-width: 3rem; }
   .editor-shell .download-button span { display: none; }
   .editor-shell .crop-stage-meta { padding-inline: 0.5rem; gap: 0.25rem; }
@@ -1097,6 +1095,9 @@ input[type="number"], select { background-color: #101010; }
   .transform-buttons button { padding: 0.4rem; font-size: 0.8rem; }
   .footer-inner { flex-direction: column; align-items: start; }
 }
+@media (max-width: 479px) {
+  .zoom-controls { top: calc(4rem + env(safe-area-inset-top)); }
+}
 @media (max-height: 500px) {
   .editor-bottom { padding-top: 0; }
   .edit-modes { margin: 0; }
@@ -1106,8 +1107,7 @@ input[type="number"], select { background-color: #101010; }
 }
 
 @media (max-height: 500px) {
-  .crop-controls .field-label-row,
-  .straighten-control .range-label label {
+  .crop-controls .field-label-row {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -1115,9 +1115,6 @@ input[type="number"], select { background-color: #101010; }
     clip-path: inset(50%);
   }
   .crop-controls .aspect-ratio-control { gap: 0; }
-  .straighten-control { display: flex; align-items: center; gap: 0.5rem; }
-  .straighten-control input { min-width: 0; }
-  .straighten-control .range-label { flex: none; gap: 0.25rem; }
 }
 
 .aspect-presets { display: flex; gap: 0.3rem; min-width: 0; max-width: 100%; overflow-x: auto; padding: 0.25rem; }
@@ -1155,8 +1152,13 @@ body:has(.shell:not(.editor-shell)) > .static-content { flex: none; max-height: 
 .editor-shell .crop-handle::after { left: auto; top: auto; right: 0; bottom: 0; }
 @media (max-width: 767px) { .editor-shell .crop-stage-meta { top: auto; bottom: 11rem; left: 0.5rem; } }
 
-.compression-result { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
-.compression-result .reduction-line { margin: 0; padding: 0; border: 0; }
+.compression-result { position: fixed; z-index: 30; right: max(0.5rem, env(safe-area-inset-right)); bottom: max(0.5rem, env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 0.5rem; max-width: min(18rem, calc(100% - 1rem)); padding: 0.5rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
+.compression-result .reduction-line { min-width: 0; margin: 0; padding: 0; border: 0; overflow-wrap: anywhere; }
+.editor-shell:has(.error-message) { padding-bottom: calc(4.5rem + max(0.5rem, env(safe-area-inset-bottom))); }
+.editor-shell:has(.error-message) .settings-column { max-height: min(25dvh, 24rem); }
+@media (max-width: 76rem) {
+  .editor-shell { padding-bottom: calc(4.5rem + max(0.5rem, env(safe-area-inset-bottom))); }
+}
 
 /* Display scale is independent of crop/encode dimensions. */
 .editor-shell .stage-area, .comparison-stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: clip; }
