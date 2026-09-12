@@ -742,7 +742,7 @@ function App() {
     const handles = [...(stage?.querySelectorAll<HTMLButtonElement>('.crop-handle') ?? [])]
     const shell = stage?.closest('.editor-shell')
     if (!stage || !crop || !handles.length || !shell) return
-    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.zoom-controls,.editor-bottom,.error-message')]
+    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.zoom-controls,.editor-bottom,.compression-result,.error-message')]
     const placeHandle = () => {
       const frame = stage.getBoundingClientRect()
       const bounds = crop.getBoundingClientRect()
@@ -1075,10 +1075,6 @@ function App() {
                   <label htmlFor="resize-width">幅<input id="resize-width" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.width ?? ''} onChange={(event) => updateResize('width', event.target.value)} /></label>
                   <label htmlFor="resize-height">高さ<input id="resize-height" type="number" min="1" step="1" placeholder="自動" value={editState.resize?.height ?? ''} onChange={(event) => updateResize('height', event.target.value)} /></label>
                 </div>
-                <div className="compression-result">
-                <div className="reduction-line" role="status" aria-live="polite"><strong className={!fullOutputMetrics && !processingError ? 'visually-hidden' : undefined}>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
-                  <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
-                </div>
                 {processingError && !fullOutputResult ? <button className="verify-output-button" type="button" disabled={busy} onClick={() => void confirmFullOutput()}>容量計算を再試行</button> : null}
 
             </aside>
@@ -1115,6 +1111,10 @@ function App() {
               <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
               <button ref={compressionTabRef} type="button" data-mode="compress" aria-controls="output-panel" aria-pressed={outputOpen} onClick={() => { setEditorMode('compress'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 8l4 4 4-4M12 12v5" /></svg><span>圧縮</span></button>
             </nav>
+          </div>
+          <div className="compression-result" role="group" aria-label="保存">
+            <div className="reduction-line" role="status" aria-live="polite"><strong className={!fullOutputMetrics && !processingError ? 'visually-hidden' : undefined}>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
+            <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
           </div>
         </> : (
           <label
