@@ -29,7 +29,7 @@ File/drop
 | `src/App.tsx` | browser UI、File input/drop、編集 intent、下部ツールによる編集・圧縮切替、表示専用ズーム・パン、quick/full comparison、preview/download の採用、source/rendered object URL の所有。画像の座標算術を持たず `geometry` に渡す。選択中の candidate と committed source/result を分離する。 |
 | `src/app-async.ts` | `ResultIntent` と `isSameResultIntent`。source/edit object identity、output MIME、quality の一致だけを判定する pure seam。 |
 | `src/image/geometry.ts` | `ImageEditState`、`calculateImageGeometry`、`constrainCrop`、`rotateEditState`。display size、final-display crop、source mapping、cropped/output size の arithmetic を所有する。 |
-| `src/image/stage.ts` | `createStageTransform` のCSS変換文字列、`zoomView` の表示倍率・位置の算術、`placeCropHandle` の操作領域配置を所有するpure seam。crop surface styleの組み立てとDOM測定は`App`、Canvasのピクセル処理は`raster`が所有する。 |
+| `src/image/stage.ts` | `createStageTransform` のCSS変換文字列、`fitView` の比較画像の全体表示、`zoomView` の表示倍率・位置の算術、`placeCropHandle` の操作領域配置を所有するpure seam。crop surface styleの組み立てとDOM測定は`App`、Canvasのピクセル処理は`raster`が所有する。 |
 | `src/image/raster.ts` | `RasterProcessor` の公開面は `process(source, editState, output)`、`clearSource()`、`dispose()`。decode、MIME/options 検証、source identity/cache、pending Promise と Worker messaging を所有する。 |
 | `src/image/worker-protocol.ts` | process/clear message の validation と `ProcessingPlan`。Worker の外から来る値を信頼せず、geometry と preview render size を組み合わせる。 |
 | `src/image/worker-scheduler.ts` | `enqueueLatest`、`completeLatest`、`clearLatest` の pure state machine。active は1件、queued は最新1件だけを表す。 |
@@ -44,7 +44,7 @@ File/drop
 
 比較は圧縮モードで重ね合わせ表示し、画像領域の Pointer capture 中の座標を画像幅に対する0〜100%へ制限して境界を操作する。キーボード操作は native range input に委ね、input 自体はポインターの対象から外してタッチ時の標準ドラッグとの競合を避ける。Chromium E2E でマウス・タッチ・キーボード操作と画像端への制限を確認する。
 
-画像のeditor-columnはviewport全体に固定する。初期表示は画像1pxを1 CSS pxとする100%で、ホイールはカーソル位置を固定して1〜1600%の表示倍率を変更する。画面幅の中央に現在倍率と「−」「＋」ボタンを重ね、狭い画面では画像操作ボタンの下に配置する。ボタンは画面中央を固定点に同じ`zoomView`で拡大縮小する。Space＋ドラッグまたは中ボタンドラッグで表示位置を移動し、キーボードの＋／−でズーム、0で100%に戻せる。表示用stateは編集intentと分離し、Workerのgeometry・出力寸法・結果採用に影響しない。画像変更は左上の「×」アイコン、削減率と保存は画面右下の独立したUIとして全モードに表示し、クロップ・傾き・反転・圧縮は下部中央に置く。四隅のハンドルはcrop枠の中央・前面UI・他のハンドルのDOM矩形を避けた最寄りの画面内の位置へ配置する。stageのpure helperとResizeObserverで配置し、表示倍率・位置・編集stateの変更でも再測定する。切り抜き枠内には現在のintentに対応する出力プレビューを重ね、再計算中は下層のソース画像が見える。状況文字は視覚的に隠し、支援技術向けの通知を維持する。
+画像のeditor-columnはviewport全体に固定する。圧縮は初回・画像差し替え・モード切替時に、切り抜き後の比較画像の縦横比を保ち、全体がviewportに収まる最大倍率へ中央配置する。ResizeObserverで画面サイズ変更時も合わせ直す。編集モードの倍率・位置は別stateに保持し、初期値は画像1pxを1 CSS pxとする100%にする。ホイールはカーソル位置を固定して通常1〜1600%の表示倍率を変更する。極小・極大画像の全体表示がその範囲外になる場合は、全体表示の倍率も操作範囲に含める。画質・出力寸法の変更やquick/full結果の採用では手動の表示倍率をリセットしない。画面幅の中央に現在倍率と「−」「＋」ボタンを重ね、狭い画面では画像操作ボタンの下に配置する。ボタンは画面中央を固定点に同じ`zoomView`で拡大縮小する。Space＋ドラッグまたは中ボタンドラッグで表示位置を移動し、キーボードの＋／−でズーム、0で100%に戻せる。表示用stateは編集intentと分離し、Workerのgeometry・出力寸法・結果採用に影響しない。画像変更は左上の「×」アイコン、削減率と保存は画面右下の独立したUIとして全モードに表示し、クロップ・傾き・反転・圧縮は下部中央に置く。四隅のハンドルはcrop枠の中央・前面UI・他のハンドルのDOM矩形を避けた最寄りの画面内の位置へ配置する。stageのpure helperとResizeObserverで配置し、表示倍率・位置・編集stateの変更でも再測定する。切り抜き枠内には現在のintentに対応する出力プレビューを重ね、再計算中は下層のソース画像が見える。状況文字は視覚的に隠し、支援技術向けの通知を維持する。
 
 画像の読み込みに成功すると、初回・差し替えとも圧縮モードで開く。形式のselect、画質のrange、幅・高さと、画像の比較表示をすぐに使える。下部のクロップ・傾き・反転を選ぶと切り抜き枠を表示し、圧縮を選ぶと比較表示へ切り替える。独立した編集・比較切替や圧縮の開閉アイコンは設けない。設定内に折りたたみは設けず、小さい画面では設定本文だけをスクロールできる。Escapeはクロップへ戻し、圧縮ボタンへフォーカスを戻す。SpaceとEscapeは画像編集中に限ってwindowのcaptureで検知し、画像ドロップ直後のbodyフォーカスも対象にする。ウィンドウのフォーカスを失ったらキー保持・パンを解除する。形式selectでは、トップレベル文書で`showPicker`が利用できる場合、Space単独でのポップアップ表示をキー解放まで遅らせ、ドラッグ時は開かない。未対応ブラウザや埋め込み文書ではselectの標準キー操作を維持する。ステージのフォーカス表示はviewportの内側に描画する。
 

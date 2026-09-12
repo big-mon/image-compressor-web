@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  fitView,
   zoomView,
   placeCropHandle,
   createStageTransform,
@@ -57,4 +58,22 @@ it('keeps the pixel under the cursor stationary while zooming and clamps scale',
   expect((point.y-next.y)/next.zoom).toBeCloseTo((point.y-view.y)/view.zoom)
   expect(zoomView({ ...view, zoom: 16 }, -1000, point).zoom).toBe(16)
   expect(zoomView({ ...view, zoom: 0.01 }, 1000, point).zoom).toBe(0.01)
+})
+
+it('fits portrait, landscape and cropped images without clipping or limiting small images to 100 percent', () => {
+  for (const [image, viewport, zoom] of [
+    [{ width: 4000, height: 3000 }, { width: 1280, height: 900 }, 0.3],
+    [{ width: 1000, height: 600 }, { width: 390, height: 844 }, 0.39],
+    [{ width: 600, height: 1000 }, { width: 820, height: 1180 }, 1.18],
+    [{ width: 16, height: 32 }, { width: 1280, height: 900 }, 28.125],
+  ] as const) {
+    expect(fitView(image, viewport)).toEqual({ zoom, x: 0, y: 0 })
+  }
+  for (const zoom of [28.125, 0.005]) {
+    const fitted = { zoom, x: 0, y: 0 }, point = { x: 0, y: 0 }
+    const delta = zoom > 16 ? 100 : -100
+    const next = zoomView(fitted, delta, point, zoom)
+    expect(next.zoom).toBeCloseTo(zoom * Math.exp(-delta * 0.002))
+    expect(zoomView(next, -delta, point, zoom).zoom).toBeCloseTo(zoom)
+  }
 })

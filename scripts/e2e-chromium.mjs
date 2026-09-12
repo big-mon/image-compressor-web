@@ -1824,11 +1824,16 @@ async function zoomCanvas(cdp, sessionId, target) {
   assert(await evaluate(cdp,sessionId,`document.querySelector('.zoom-controls output').textContent==='${Math.round(target*100)}%'`),'Wheel zoom must update the visible percentage.')
 }
 
+async function assertComparisonFit(cdp, sessionId) {
+  await waitForDom(cdp,sessionId,`(()=>{const r=document.querySelector('.comparison-viewport').getBoundingClientRect();return !document.querySelector('#output-panel').hidden && r.width>0 && r.height>0 && r.left>=-1 && r.top>=-1 && r.right<=innerWidth+1 && r.bottom<=innerHeight+1 && (Math.abs(r.width-innerWidth)<1 || Math.abs(r.height-innerHeight)<1) && Math.abs(r.x+r.width/2-innerWidth/2)<1 && Math.abs(r.y+r.height/2-innerHeight/2)<1 && document.querySelector('.zoom-controls output').textContent===Math.round(Number(document.querySelector('.editor-column').dataset.viewZoom)*100)+'%'})()`, 'comparison fills one viewport axis without clipping')
+}
+
 async function assertZoomControls(cdp, sessionId) {
   await installWorkerProcessGate(cdp,sessionId)
   for (const [mode, input] of [[0,'mouse'],[1,'keyboard'],[2,'touch']]) {
     await evaluate(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[${mode}].click()`)
     await waitForFullOutput(cdp,sessionId)
+    await zoomCanvas(cdp,sessionId,1)
     const before=await evaluate(cdp,sessionId,`({crop:document.querySelector('.crop-rectangle').style.cssText,url:document.querySelector('.processed-preview').src,width:document.querySelector('#resize-width').value,height:document.querySelector('#resize-height').value,requests:window.__e2eWorkerProcessGate.requests.length,split:document.querySelector('#comparison-split').value})`)
     for (const [label, percent] of [['拡大','122%'],['縮小','100%']]) {
       const selector=`.zoom-controls button[aria-label="${label}"]`
@@ -2037,7 +2042,8 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.editor-column')?.dataset.viewZoom === '1' && document.querySelector('.zoom-controls output')?.textContent === '100%' && document.querySelector('#output-panel')?.hidden === false && document.querySelector('[data-mode=compress]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('.stage-area')?.hidden === true && document.querySelector('.comparison-section')?.hidden === false`, 'initial compression mode at 100 percent')
+  await waitForDom(cdp, sessionId, `document.querySelector('#output-panel')?.hidden === false && document.querySelector('[data-mode=compress]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('.stage-area')?.hidden === true && document.querySelector('.comparison-section')?.hidden === false`, 'initial compression mode')
+  await assertComparisonFit(cdp,sessionId)
   await waitForDom(cdp,sessionId,`document.querySelector('.processed-preview')?.dataset.previewKind === 'full' && !document.querySelector('.download-button').disabled`, 'automatic full output without selecting compression')
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
   assert(await evaluate(cdp,sessionId,`document.querySelector('[data-mode=compress]').textContent==='圧縮' && !document.querySelector('#output-panel details,#output-panel summary,.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must show controls without accordion sections.')
@@ -2068,6 +2074,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   for (const viewport of [...TABLET_VIEWPORTS,DESKTOP_VIEWPORT,...[1216,1217].map(width=>({...DESKTOP_VIEWPORT,width})),MOBILE_VIEWPORT,...[320,479,480].map(width=>({...MOBILE_VIEWPORT,width,height:568})),{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
     for(const open of [false,true]) {
       layouts.push(await assertEditorLayout(cdp,sessionId,viewport,open))
+      if(open) await assertComparisonFit(cdp,sessionId)
       await captureScreenshot(cdp,sessionId,`editor-${viewport.width}-${viewport.height}-${open?'output':'crop'}.png`)
     }
   }
@@ -2341,7 +2348,39 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await evaluate(cdp,sessionId,`document.activeElement.blur()`)
   await dispatchFileDrop(cdp,sessionId,'.change-image-button',cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1' && document.querySelector('[data-mode=compress]').getAttribute('aria-pressed')==='true' && document.querySelector('.stage-area').hidden`),'Dropped replacement must start in compression at 100 percent.')
+  await assertComparisonFit(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('[data-mode=compress]').getAttribute('aria-pressed')==='true' && document.querySelector('.stage-area').hidden`),'Dropped replacement must start in fitted compression.')
+  await clickButton(cdp,sessionId,'クロップ')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom==='1'`),'A new image must still start editing at 100 percent.')
+  await zoomCanvas(cdp,sessionId,2)
+  await clickButton(cdp,sessionId,'圧縮')
+  await assertComparisonFit(cdp,sessionId)
+  await installWorkerProcessGate(cdp,sessionId)
+  const beforeFit = await evaluate(cdp,sessionId,`({crop:document.querySelector('.crop-rectangle').style.cssText,url:document.querySelector('.processed-preview').src,requests:window.__e2eWorkerProcessGate.requests.length})`)
+  for (const viewport of [...TABLET_VIEWPORTS,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:667,height:375},DESKTOP_VIEWPORT]) {
+    await setViewport(cdp,sessionId,viewport)
+    await assertComparisonFit(cdp,sessionId)
+    await captureScreenshot(cdp,sessionId,`comparison-fit-${viewport.width}-${viewport.height}.png`)
+  }
+  await delay(800)
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(beforeFit.crop)} && document.querySelector('.processed-preview').src===${JSON.stringify(beforeFit.url)} && window.__e2eWorkerProcessGate.requests.length===${beforeFit.requests}`),'Fitting must not change the crop or re-encode the image.')
+  await zoomCanvas(cdp,sessionId,3)
+  await setControlValue(cdp,sessionId,'#quality','0.73')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-3)<0.001`),'Quality edits and quick/full replacement must preserve manual comparison zoom.')
+  await setControlValue(cdp,sessionId,'#resize-width','500')
+  await waitForFullOutput(cdp,sessionId)
+  assert(await evaluate(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-3)<0.001`),'Output resizing must preserve the comparison scale.')
+  await setControlValue(cdp,sessionId,'#resize-width','')
+  await waitForFullOutput(cdp,sessionId)
+  await clickButton(cdp,sessionId,'圧縮')
+  await assertComparisonFit(cdp,sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x:600,y:300,button:'middle',clickCount:1},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:620,y:310,button:'middle',buttons:4},sessionId)
+  await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:620,y:310,button:'middle',clickCount:1},sessionId)
+  assert(await evaluate(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-2)<0.001 && document.querySelector('#output-panel').hidden && document.querySelector('.crop-surface').style.transform==='translate(0px, 0px)'`),'Returning from compression must restore the editing view and stop the previous pan.')
   await assertZoomControls(cdp,sessionId)
   // Space drag must work with focus on sibling UI, without editing or activating it on release.
   for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[false,'.download-button'],[true,'.download-button'],[false,'.zoom-controls button:first-child'],[true,'.zoom-controls button:last-child'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
@@ -2357,7 +2396,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:625,y:310,button:'left',buttons:1},sessionId)
     await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:625,y:310,button:'left',clickCount:1},sessionId)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
-    await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan from '+selector)
+    await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan in '+(compress?'compression':'crop')+' from '+selector+' starting '+JSON.stringify(before))
     assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(before.crop)} && document.querySelector('#comparison-split').value===${JSON.stringify(before.split)} && document.querySelector('.processed-preview').src===${JSON.stringify(before.url)} && document.querySelector('#output-panel').hidden===${!compress}`),'Space pan changed the edit, comparison or selected mode: '+selector)
     assert(await evaluate(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom===${JSON.stringify(before.zoom)}`),'Space pan must not activate a focused zoom button on release.')
   }
@@ -2539,6 +2578,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await writeFile(panoramaPath,Buffer.from(panoramaPng,'base64'))
   await setFileInput(cdp,sessionId,panoramaPath)
   await waitForDom(cdp,sessionId,`document.querySelector('.stage-image')?.naturalWidth===12000 && document.querySelector('.processed-preview')?.dataset.previewKind==='quick' && !document.querySelector('.download-button').disabled`, 'panorama quick preview')
+  await assertComparisonFit(cdp,sessionId)
   await setControlValue(cdp,sessionId,'#output-format','image/png')
   await setControlValue(cdp,sessionId,'#resize-width','2048')
   await clickButton(cdp,sessionId,'傾き・反転')
@@ -2546,6 +2586,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await waitForDom(cdp,sessionId,`document.querySelector('.processed-preview')?.naturalWidth===960 && !document.querySelector('.download-button').disabled`, 'straightened panorama quick crop')
   await setOutputPanel(cdp,sessionId,true)
   await waitForFullOutput(cdp,sessionId)
+  await assertComparisonFit(cdp,sessionId)
   const panorama = await evaluate(cdp,sessionId,`(async()=>{const img=document.querySelector('.processed-preview');await img.decode();const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;const x=c.getContext('2d');x.drawImage(img,0,0);const bytes=x.getImageData(0,0,c.width,c.height).data;let empty=0;for(let i=3;i<bytes.length;i+=4)if(bytes[i]===0)empty++;return {width:c.width,height:c.height,empty,center:[...x.getImageData(c.width/2,c.height/2,1,1).data]}})()`)
   assert(panorama.width===2048 && panorama.height===171 && panorama.empty===0 && panorama.center.join(',')==='60,120,180,255', 'Panorama full crop failed: '+JSON.stringify(panorama))
 

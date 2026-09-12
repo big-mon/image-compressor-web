@@ -29,6 +29,7 @@ import {
   type RasterResult,
 } from './image/raster'
 import {
+  fitView,
   zoomView,
   placeCropHandle,
   createStageTransform,
@@ -87,7 +88,12 @@ function App() {
   const [editorMode, setEditorMode] = useState<'crop' | 'transform' | 'compress'>('compress')
   const editorView = editorMode === 'compress' ? 'compare' : 'edit'
   const outputOpen = editorMode === 'compress'
-  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
+  const [editView, setEditView] = useState({ zoom: 1, x: 0, y: 0 })
+  const [compressionView, setCompressionView] = useState({ zoom: 1, x: 0, y: 0 })
+  const [compressionFitZoom, setCompressionFitZoom] = useState(1)
+  const view = outputOpen ? compressionView : editView
+  const setView = outputOpen ? setCompressionView : setEditView
+  const fitZoom = outputOpen ? compressionFitZoom : 1
   const editorRef = useRef<HTMLDivElement>(null)
   const spaceHeld = useRef(false)
   const spacePanned = useRef(false)
@@ -151,6 +157,34 @@ function App() {
       editState,
     )
   }, [asset, editState])
+
+  const comparisonWidth = geometry?.crop.width
+  const comparisonHeight = geometry?.crop.height
+  const fitComparison = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor?.clientWidth || !editor.clientHeight || !comparisonWidth || !comparisonHeight) return
+    const fitted = fitView({ width: comparisonWidth, height: comparisonHeight }, { width: editor.clientWidth, height: editor.clientHeight })
+    setCompressionView(fitted)
+    setCompressionFitZoom(fitted.zoom)
+    panStart.current = null
+  }, [comparisonWidth, comparisonHeight])
+
+  useLayoutEffect(() => {
+    const editor = editorRef.current
+    panStart.current = null
+    if (!outputOpen || !editor) return
+    fitComparison()
+    let width = editor.clientWidth, height = editor.clientHeight
+    const observer = new ResizeObserver(() => {
+      // The observer's initial notification must not overwrite a manual gesture.
+      if (width === editor.clientWidth && height === editor.clientHeight) return
+      width = editor.clientWidth
+      height = editor.clientHeight
+      fitComparison()
+    })
+    observer.observe(editor)
+    return () => observer.disconnect()
+  }, [asset, outputOpen, fitComparison])
 
   const quickPreviewMetrics = asset && quickPreviewResult
     ? calculateMetrics({ bytes: asset.file.size }, quickPreviewResult)
@@ -408,7 +442,7 @@ function App() {
       sourceUrlRef.current = objectUrl
       setAsset({ file, pixels, objectUrl })
       setEditorMode('compress')
-      setView({ zoom: 1, x: 0, y: 0 })
+      setEditView({ zoom: 1, x: 0, y: 0 })
       setEditState(createEditState({ width: pixels.width, height: pixels.height }))
       setCandidatePending(false)
       setFileError('')
@@ -789,7 +823,7 @@ function App() {
     const wheel = (event: WheelEvent) => {
       event.preventDefault()
       const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? editor.clientHeight : 1)
-      setView(current => zoomView(current, delta, { x: event.clientX - editor.clientWidth / 2, y: event.clientY - editor.clientHeight / 2 }))
+      setView(current => zoomView(current, delta, { x: event.clientX - editor.clientWidth / 2, y: event.clientY - editor.clientHeight / 2 }, fitZoom))
     }
     const keyDown = (event: KeyboardEvent) => {
       if (event.key === ' ') {
@@ -844,7 +878,7 @@ function App() {
       window.removeEventListener('blur', releaseSpace)
       window.removeEventListener('focusout', releaseSpace)
     }
-  }, [asset, outputOpen])
+  }, [asset, outputOpen, setView, fitZoom])
 
   const comparisonSourceCanvasStyle: CSSProperties | undefined = geometry
     ? {
@@ -898,11 +932,11 @@ function App() {
         </div>}
         {asset && editState && geometry ? <>
           <div className="zoom-controls" role="group" aria-label="表示倍率">
-            <button type="button" aria-label="縮小" title="縮小" disabled={view.zoom <= 0.01} onClick={() => setView(current => zoomView(current, 100, { x: 0, y: 0 }))}>
+            <button type="button" aria-label="縮小" title="縮小" disabled={view.zoom <= Math.min(0.01, fitZoom)} onClick={() => setView(current => zoomView(current, 100, { x: 0, y: 0 }, fitZoom))}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
             </button>
             <output aria-label="現在の拡大率">{Math.round(view.zoom * 100)}%</output>
-            <button type="button" aria-label="拡大" title="拡大" disabled={view.zoom >= 16} onClick={() => setView(current => zoomView(current, -100, { x: 0, y: 0 }))}>
+            <button type="button" aria-label="拡大" title="拡大" disabled={view.zoom >= Math.max(16, fitZoom)} onClick={() => setView(current => zoomView(current, -100, { x: 0, y: 0 }, fitZoom))}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
             </button>
           </div>
@@ -912,7 +946,7 @@ function App() {
                 if (event.key === ' ') event.preventDefault()
                 if (['+', '=', '-', '0'].includes(event.key)) {
                   event.preventDefault()
-                  setView(current => event.key === '0' ? { zoom: 1, x: 0, y: 0 } : zoomView(current, event.key === '-' ? 100 : -100, { x: 0, y: 0 }))
+                  setView(current => event.key === '0' ? { zoom: 1, x: 0, y: 0 } : zoomView(current, event.key === '-' ? 100 : -100, { x: 0, y: 0 }, fitZoom))
                 }
               }}
               onPointerDownCapture={event => {
@@ -1153,9 +1187,9 @@ function App() {
               </div>
             </div>
             <nav className="edit-modes" aria-label="編集モード">
-              <button type="button" aria-pressed={editorMode === 'crop'} onClick={() => { setEditorMode('crop'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v16h16M2 6h16v16M9 6h9v9" /></svg><span>クロップ</span></button>
-              <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
-              <button ref={compressionTabRef} type="button" data-mode="compress" aria-controls="output-panel" aria-pressed={outputOpen} onClick={() => { setEditorMode('compress'); setView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 8l4 4 4-4M12 12v5" /></svg><span>圧縮</span></button>
+              <button type="button" aria-pressed={editorMode === 'crop'} onClick={() => { setEditorMode('crop'); setEditView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v16h16M2 6h16v16M9 6h9v9" /></svg><span>クロップ</span></button>
+              <button type="button" aria-pressed={editorMode === 'transform'} onClick={() => { setEditorMode('transform'); setEditView(current => ({ ...current, x: 0, y: 0 })) }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 4-4 13L3 17Z M3 3v5h5" /></svg><span>傾き・反転</span></button>
+              <button ref={compressionTabRef} type="button" data-mode="compress" aria-controls="output-panel" aria-pressed={outputOpen} onClick={() => { if (outputOpen) fitComparison(); else setEditorMode('compress') }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 8l4 4 4-4M12 12v5" /></svg><span>圧縮</span></button>
             </nav>
           </div>
           <div className="compression-result" role="group" aria-label="保存">
