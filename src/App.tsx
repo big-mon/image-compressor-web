@@ -1159,7 +1159,7 @@ function App() {
             </nav>
           </div>
           <div className="compression-result" role="group" aria-label="保存">
-            <div className="reduction-line" role="status" aria-live="polite"><strong className={!fullOutputMetrics && !processingError ? 'visually-hidden' : undefined}>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : '計算中…'}</strong></div>
+            <div className="reduction-line" role="status" aria-live="polite"><strong className={!fullOutputMetrics && !processingError ? 'visually-hidden' : undefined}>{fullOutputMetrics ? `${Math.abs(fullOutputMetrics.reductionPercent).toFixed(1)}% ${fullOutputMetrics.reductionPercent >= 0 ? '削減' : '増加'}` : processingError ? '計算できませんでした' : fullOutputPending || exportPending ? '計算中…' : '削減率は未計算'}</strong></div>
             <button className="download-button" type="button" disabled={busy || !renderedResult} onClick={() => void download()}>保存 <span>.{getOutputExtension(outputMime)}</span></button>
           </div>
         </> : (
