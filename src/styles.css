@@ -983,7 +983,7 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
 }
 .image-actions { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: max(0.5rem, env(safe-area-inset-left)); display: flex; gap: 0.5rem; }
 .image-actions button, .image-actions .change-image-button { background-color: var(--panel); }
-.zoom-controls { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); right: max(0.5rem, env(safe-area-inset-right)); display: flex; align-items: center; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
+.zoom-controls { position: fixed; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
 .zoom-controls button { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 0.7rem; background: transparent; }
 .zoom-controls button:hover:not(:disabled) { background: var(--panel-raised); }
 .zoom-controls button:focus-visible { outline-offset: -3px; }
@@ -1096,6 +1096,9 @@ input[type="number"], select { background-color: #101010; }
   .transform-buttons { gap: 0.3rem; }
   .transform-buttons button { padding: 0.4rem; font-size: 0.8rem; }
   .footer-inner { flex-direction: column; align-items: start; }
+}
+@media (max-width: 479px) {
+  .zoom-controls { top: calc(4rem + env(safe-area-inset-top)); }
 }
 @media (max-height: 500px) {
   .editor-bottom { padding-top: 0; }

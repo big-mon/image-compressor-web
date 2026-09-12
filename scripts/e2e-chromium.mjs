@@ -1872,7 +1872,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   const layout=await evaluate(cdp,sessionId,`(()=>{
     const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON()
     const controls=[...document.querySelectorAll('.image-actions button,.change-image-button,.zoom-controls button,.edit-modes button')]
-    return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),actions:rect('.image-actions'),zoom:rect('.zoom-controls'),
+    return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),actions:rect('.image-actions'),zoom:rect('.zoom-controls'),zoomValue:rect('.zoom-controls output'),
       zoomOrder:[...document.querySelector('.zoom-controls').children].map(e=>e.getAttribute('aria-label')),
       scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
       controls:controls.map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}}),
@@ -1885,7 +1885,8 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(!layout.obsolete && layout.cropHidden===panelOpen && layout.compareHidden!==panelOpen,'Compression must select comparison without separate modes.')
   assert(Math.abs(layout.bottom.x+layout.bottom.width/2-viewport.width/2)<1 && layout.bottom.y>=0 && layout.bottom.bottom<=viewport.height,'Bottom menu must stay centred and within viewport.')
   assert(layout.controls.every(b=>b.width>=44&&b.height>=44&&b.hit),'Overlay buttons must remain reachable: '+JSON.stringify(layout))
-  assert(layout.zoom.x>=layout.actions.right && layout.zoom.right<=viewport.width && layout.zoom.y>=0 && layout.zoom.bottom<=viewport.height && layout.zoomOrder.join(',')==='縮小,現在の拡大率,拡大','Zoom readout must sit between minus and plus without overlapping image actions: '+JSON.stringify(layout))
+  assert(Math.abs(layout.zoomValue.x+layout.zoomValue.width/2-viewport.width/2)<1 && layout.zoom.x>=0 && layout.zoom.right<=viewport.width && layout.zoom.y>=0 && layout.zoom.bottom<=viewport.height && layout.zoomOrder.join(',')==='縮小,現在の拡大率,拡大','Zoom readout must be centred on the viewport between minus and plus: '+JSON.stringify(layout))
+  assert(layout.zoom.x>=layout.actions.right || layout.zoom.y>=layout.actions.bottom,'Zoom controls must not overlap image actions: '+JSON.stringify(layout))
   if(!panelOpen) assert(layout.handles.length===4 && layout.handles.every(Boolean),'All four handles must remain reachable: '+JSON.stringify(layout))
   if(panelOpen) {
     for(const selector of ['#output-format','#resize-height','.download-button']) {
@@ -1989,7 +1990,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp, sessionId, `document.querySelector('.stage-image').naturalWidth === 16 && document.querySelector('.stage-image').naturalHeight === 32`), 'EXIF orientation was not normalized.')
   assert(await evaluate(cdp, sessionId, `!document.querySelector('#output-panel').hidden`), 'Saving must keep compression visible.')
   const layouts = []
-  for (const viewport of [...TABLET_VIEWPORTS,DESKTOP_VIEWPORT,MOBILE_VIEWPORT,{...MOBILE_VIEWPORT,width:320,height:568},{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
+  for (const viewport of [...TABLET_VIEWPORTS,DESKTOP_VIEWPORT,MOBILE_VIEWPORT,...[320,479,480].map(width=>({...MOBILE_VIEWPORT,width,height:568})),{...DESKTOP_VIEWPORT,width:800,height:600},{...MOBILE_VIEWPORT,width:667,height:375}]) {
     for(const open of [false,true]) {
       layouts.push(await assertEditorLayout(cdp,sessionId,viewport,open))
       await captureScreenshot(cdp,sessionId,`editor-${viewport.width}-${viewport.height}-${open?'output':'crop'}.png`)
