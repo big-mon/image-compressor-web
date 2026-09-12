@@ -1875,6 +1875,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
     const controls=[...document.querySelectorAll('.change-image-button,.zoom-controls button,.edit-modes button')]
     return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),actions:rect('.image-actions'),zoom:rect('.zoom-controls'),zoomValue:rect('.zoom-controls output'),
       zoomOrder:[...document.querySelector('.zoom-controls').children].map(e=>e.getAttribute('aria-label')),
+      changeIcon:!!document.querySelector('.change-image-button[aria-label="画像を変更"][title="画像を変更"] svg[aria-hidden="true"]') && document.querySelector('.change-image-button').textContent.trim()==='',
       scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
       controls:controls.map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}}),
       cropHidden:document.querySelector('.stage-area').hidden,compareHidden:document.querySelector('.comparison-section').hidden,
@@ -1886,6 +1887,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(!layout.obsolete && layout.cropHidden===panelOpen && layout.compareHidden!==panelOpen,'Compression must select comparison without separate modes.')
   assert(Math.abs(layout.bottom.x+layout.bottom.width/2-viewport.width/2)<1 && layout.bottom.y>=0 && layout.bottom.bottom<=viewport.height,'Bottom menu must stay centred and within viewport.')
   assert(layout.controls.every(b=>b.width>=44&&b.height>=44&&b.hit),'Overlay buttons must remain reachable: '+JSON.stringify(layout))
+  assert(layout.changeIcon,'Image selection must use an icon with an accessible name.')
   assert(Math.abs(layout.zoomValue.x+layout.zoomValue.width/2-viewport.width/2)<1 && layout.zoom.x>=0 && layout.zoom.right<=viewport.width && layout.zoom.y>=0 && layout.zoom.bottom<=viewport.height && layout.zoomOrder.join(',')==='縮小,現在の拡大率,拡大','Zoom readout must be centred on the viewport between minus and plus: '+JSON.stringify(layout))
   assert(layout.zoom.x>=layout.actions.right || layout.zoom.y>=layout.actions.bottom,'Zoom controls must not overlap image actions: '+JSON.stringify(layout))
   if(!panelOpen) assert(layout.handles.length===4 && layout.handles.every(Boolean),'All four handles must remain reachable: '+JSON.stringify(layout))
@@ -2333,6 +2335,23 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===0`),'Image change must wait for Space release to allow panning.')
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
   assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===1`),'Standalone Space must still open image selection.')
+  for(const input of ['mouse','touch','Enter']) {
+    await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks=0;document.querySelector('#image-input').addEventListener('click',event=>{event.preventDefault();window.__e2eImageChangeClicks++},{once:true});document.querySelector('.change-image-button').focus()`)
+    const point=await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('.change-image-button svg').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+    if(input==='mouse') {
+      await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
+    } else if(input==='touch') {
+      await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]},sessionId)
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId)
+      await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
+    } else {
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId)
+      await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},sessionId)
+    }
+    await waitForDom(cdp,sessionId,`window.__e2eImageChangeClicks===1`,input+' activates image selection from the icon')
+  }
   await clickButton(cdp,sessionId,'クロップ')
   await zoomCanvas(cdp,sessionId,2)
   await evaluate(cdp,sessionId,`document.querySelector('.zoom-controls button:last-child').focus()`)

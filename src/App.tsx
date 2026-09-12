@@ -853,6 +853,8 @@ function App() {
                 className={`change-image-button${dragging ? ' is-dragging' : ''}`}
                 htmlFor="image-input"
                 role="button"
+                aria-label="画像を変更"
+                title="画像を変更"
                 tabIndex={0}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -871,7 +873,7 @@ function App() {
                   }
                 }}
               >
-                画像を変更
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
               </label>
         </div>}
         {asset && editState && geometry ? <>
