@@ -1584,11 +1584,11 @@ async function runPreDebounceInvalidReplacementRegression({ cdp, fixturePath, in
   }
 }
 
-async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessionId, decodeSupported }) {
+async function runConcurrentDecodeEditSelectionRegression({ cdp, fixturePath, sessionId, decodeSupported }) {
   if (!decodeSupported) {
     return { reason: 'createImageBitmap is unavailable for the deterministic decode gate.', skipped: true }
   }
-  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'decode/edit/reset baseline', '16 × 32 px')
+  const restored = await restoreReadySource(cdp, sessionId, fixturePath, 'decode/edit/selection baseline', '16 × 32 px')
   try {
     const baseline = restored.ready
     const currentQuality = baseline.quality
@@ -1609,7 +1609,7 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
         return { gate, state }
       }
       throw new Error(`Concurrent decode did not remain a candidate against the retained committed preview: ${JSON.stringify({ baseline, gate, state })}`)
-    }, 'the held replacement decode before edit/reset', PR8_ASSERTION_TIMEOUT_MS)
+    }, 'the held replacement decode before edit/selection', PR8_ASSERTION_TIMEOUT_MS)
 
     await setControlValue(cdp, sessionId, '#quality', nextQuality)
     const heldWorker = await waitFor(async () => {
@@ -1619,20 +1619,21 @@ async function runConcurrentDecodeEditResetRegression({ cdp, fixturePath, sessio
         return { gate, state }
       }
       throw new Error(`Edit did not produce a held preview while decode was pending: ${JSON.stringify({ gate, state })}`)
-    }, 'the held edit preview before reset', PR8_ASSERTION_TIMEOUT_MS)
+    }, 'the held edit preview before selecting again', PR8_ASSERTION_TIMEOUT_MS)
 
-    await clickButton(cdp, sessionId, 'リセット')
-    await waitForDom(cdp, sessionId, `['left','top','width','height'].map(key => document.querySelector('.crop-rectangle')?.style[key]).join(',') === '0%,0%,100%,100%'`, 'the reset edit state while decode and Worker work are pending')
-    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The held edit Worker request was not released after reset.')
-    assert(await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.release()') === true, 'The held replacement decode was not released after reset.')
+    await setFileInput(cdp, sessionId, fixturePath)
+    await waitForDom(cdp, sessionId, `document.querySelector('.stage-image').src !== ${JSON.stringify(baseline.sourceUrl)}`, 'the latest selection while decode and Worker work are pending')
+    const selectedSourceUrl = await evaluate(cdp, sessionId, `document.querySelector('.stage-image').src`)
+    assert(await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.release()') === true, 'The held edit Worker request was not released after selecting again.')
+    assert(await evaluate(cdp, sessionId, 'window.__e2eDecodeGate.release()') === true, 'The held replacement decode was not released after selecting again.')
 
     const recovered = await waitFor(async () => {
       const state = await readPr8State(cdp, sessionId)
-      if (state.status === 'プレビュー準備完了' && state.busy === false && state.pending === false && state.previewUrl.startsWith('blob:') && state.sourceUrl === baseline.sourceUrl && state.sourceDimensions === '16 × 32 px' && state.previewNaturalWidth === 16 && state.previewNaturalHeight === 32) {
+      if (state.status === 'プレビュー準備完了' && state.busy === false && state.pending === false && state.previewUrl.startsWith('blob:') && state.sourceUrl === selectedSourceUrl && state.sourceDimensions === '16 × 32 px' && state.previewNaturalWidth === 16 && state.previewNaturalHeight === 32) {
         return state
       }
-      throw new Error(`Reset did not win the concurrent decode/edit race: ${JSON.stringify({ baseline, heldDecode, heldWorker, state })}`)
-    }, 'the current preview after concurrent decode/edit/reset', PR8_ASSERTION_TIMEOUT_MS)
+      throw new Error(`The latest selection did not win the concurrent decode/edit race: ${JSON.stringify({ baseline, heldDecode, heldWorker, state })}`)
+    }, 'the current preview after concurrent decode/edit/selection', PR8_ASSERTION_TIMEOUT_MS)
     return { baseline, heldDecode, heldWorker, recovered }
   } finally {
     await evaluate(cdp, sessionId, 'window.__e2eWorkerProcessGate.disarm()').catch(() => {})
@@ -1871,13 +1872,13 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   await setOutputPanel(cdp, sessionId, panelOpen)
   const layout=await evaluate(cdp,sessionId,`(()=>{
     const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON()
-    const controls=[...document.querySelectorAll('.image-actions button,.change-image-button,.zoom-controls button,.edit-modes button')]
+    const controls=[...document.querySelectorAll('.change-image-button,.zoom-controls button,.edit-modes button')]
     return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),actions:rect('.image-actions'),zoom:rect('.zoom-controls'),zoomValue:rect('.zoom-controls output'),
       zoomOrder:[...document.querySelector('.zoom-controls').children].map(e=>e.getAttribute('aria-label')),
       scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
       controls:controls.map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}}),
       cropHidden:document.querySelector('.stage-area').hidden,compareHidden:document.querySelector('.comparison-section').hidden,
-      obsolete:!!document.querySelector('.view-switch,.output-menu,header,footer'),
+      obsolete:!!document.querySelector('.view-switch,.output-menu,header,footer,.image-actions button'),
       handles:[...document.querySelectorAll('.crop-handle')].map(h=>{const r=h.getBoundingClientRect();return h.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})}
   })()`)
   assert(layout.shell.height===viewport.height && layout.editor.width===viewport.width && layout.editor.height===viewport.height,'Canvas must fill viewport.')
@@ -2229,10 +2230,10 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await clickButton(cdp,sessionId,'容量計算を再試行')
   await waitForFullOutput(cdp,sessionId)
 
-  // Retain deterministic decode, reset and invalid-file/preview race regressions.
+  // Retain deterministic decode, selection and invalid-file/preview race regressions.
   await installDecodeGate(cdp,sessionId)
   await runLatestCandidateOrderingRegression({cdp,sessionId,cropDragFixturePath,fixturePath,decodeSupported:true})
-  await runConcurrentDecodeEditResetRegression({cdp,sessionId,fixturePath,decodeSupported:true})
+  await runConcurrentDecodeEditSelectionRegression({cdp,sessionId,fixturePath,decodeSupported:true})
   await runNoopOutputInvalidationRegression({cdp,sessionId,fixturePath,selector:'#quality',valueKey:'quality',label:'same quality'})
   await runNoopOutputInvalidationRegression({cdp,sessionId,fixturePath,selector:'#output-format',valueKey:'outputMime',label:'same MIME'})
   await runCancelledExportEditRegression({cdp,sessionId,fixturePath,downloadDirectory})

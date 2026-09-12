@@ -42,7 +42,7 @@ File/drop
 
 比較は圧縮モードで重ね合わせ表示し、画像領域の Pointer capture 中の座標を画像幅に対する0〜100%へ制限して境界を操作する。キーボード操作は native range input に委ね、input 自体はポインターの対象から外してタッチ時の標準ドラッグとの競合を避ける。Chromium E2E でマウス・タッチ・キーボード操作と画像端への制限を確認する。
 
-画像のeditor-columnはviewport全体に固定する。初期表示は画像1pxを1 CSS pxとする100%で、ホイールはカーソル位置を固定して1〜1600%の表示倍率を変更する。画面幅の中央に現在倍率と「−」「＋」ボタンを重ね、狭い画面では画像操作ボタンの下に配置する。ボタンは画面中央を固定点に同じ`zoomView`で拡大縮小する。Space＋ドラッグまたは中ボタンドラッグで表示位置を移動し、キーボードの＋／−でズーム、0で100%に戻せる。表示用stateは編集intentと分離し、Workerのgeometry・出力寸法・結果採用に影響しない。画像変更・リセットは前面の操作群、保存は削減率の隣、クロップ・傾き・反転・圧縮は下部中央に置く。四隅のハンドルはcrop枠の中央・前面UI・他のハンドルのDOM矩形を避けた最寄りの画面内の位置へ配置する。stageのpure helperとResizeObserverで配置し、表示倍率・位置・編集stateの変更でも再測定する。切り抜き枠内には現在のintentに対応する出力プレビューを重ね、再計算中は下層のソース画像が見える。状況文字は視覚的に隠し、支援技術向けの通知を維持する。
+画像のeditor-columnはviewport全体に固定する。初期表示は画像1pxを1 CSS pxとする100%で、ホイールはカーソル位置を固定して1〜1600%の表示倍率を変更する。画面幅の中央に現在倍率と「−」「＋」ボタンを重ね、狭い画面では画像操作ボタンの下に配置する。ボタンは画面中央を固定点に同じ`zoomView`で拡大縮小する。Space＋ドラッグまたは中ボタンドラッグで表示位置を移動し、キーボードの＋／−でズーム、0で100%に戻せる。表示用stateは編集intentと分離し、Workerのgeometry・出力寸法・結果採用に影響しない。画像変更は左上、保存は削減率の隣、クロップ・傾き・反転・圧縮は下部中央に置く。四隅のハンドルはcrop枠の中央・前面UI・他のハンドルのDOM矩形を避けた最寄りの画面内の位置へ配置する。stageのpure helperとResizeObserverで配置し、表示倍率・位置・編集stateの変更でも再測定する。切り抜き枠内には現在のintentに対応する出力プレビューを重ね、再計算中は下層のソース画像が見える。状況文字は視覚的に隠し、支援技術向けの通知を維持する。
 
 初期モードはクロップである。下部の圧縮を選択すると同じメニュー内に形式のselect、画質のrange、幅・高さを表示し、画像領域はクロップから比較へ切り替える。独立した編集・比較切替や圧縮の開閉アイコンは設けない。設定内に折りたたみは設けず、小さい画面では設定本文だけをスクロールできる。Escapeはクロップへ戻し、圧縮ボタンへフォーカスを戻す。SpaceとEscapeは画像編集中に限ってwindowのcaptureで検知し、画像ドロップ直後のbodyフォーカスも対象にする。ウィンドウのフォーカスを失ったらキー保持・パンを解除する。形式selectでは、トップレベル文書で`showPicker`が利用できる場合、Space単独でのポップアップ表示をキー解放まで遅らせ、ドラッグ時は開かない。未対応ブラウザや埋め込み文書ではselectの標準キー操作を維持する。ステージのフォーカス表示はviewportの内側に描画する。
 
@@ -51,7 +51,7 @@ File/drop
 full出力の自動計算は既存のrequest id・intent guardで採用を制御し、編集中および圧縮パネルを閉じたときはタイマーを破棄する。すでに開始したfull処理は中断せず完了まで継続するため、その間の新しいpreviewは既存schedulerの契約どおり待機する。失敗時は自動ループを止めて再試行を提示する。削減率はmetadata strip後のfull Blobと元Fileのbytesから計算し、容量が増えた場合は増加率として表示する。quickのbytesは保存容量として表示しない。
 
 1. File を受け取ると `App` は candidate として MIME を検査し、decode 完了を `fileLoadGeneration` で guard する。candidate の読み込み中・失敗時は committed source、編集、result URL、現行 preview の debounce/in-flight work を保持する。新しい選択は論理的に obsolete な export と candidate を無効化し、比較表示を解放する。
-2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。reset は candidate generation を進めて candidate を取り消し、committed source の編集だけを再処理する。
+2. candidate の decode が成功した時だけ、`App` は result intent を無効化してから `clearSource()` を呼び、旧 rendered/source URL を解放し、新しい source/edit を committed state にする。decode 失敗や MIME 不一致で committed state を捨てない。
 3. `RasterProcessor` は同じ decoded pixel object を `sourceIdentity` で認識し、初回だけ pixel buffer の copy を `sourceKey` 付きで transfer する。後続 request は cache key を渡す。
 4. `clearSource()` は source key を捨て、generation を増やし、pending Promise を reject してから Worker に clear message を送る。Worker は cache を空にし、clear より前の queued request を stale にする。
 5. Worker scheduler は active を中断せず保持するが、新世代の request は queued にできる。active が終わると旧結果は stale、次の世代の最新 request が start する。queued が置き換わると置き換えられた request も stale になる。
@@ -110,7 +110,7 @@ Chromium E2E は CDP の HTTP/WebSocket 観測と static-server request log を�
 ## Resource ownership
 
 - `decodeImageFile` は `ImageBitmap` を `finally` で close し、fallback の temporary object URL を revoke する。
-- `App` は candidate decode/commit に失敗した一時 object URL を revoke し、成功した candidate の source URL を committed source として次の成功 commit・unmount で置き換え/revoke する。rendered result の URL も次の採用・reset・unmount で revoke する。
+- `App` は candidate decode/commit に失敗した一時 object URL を revoke し、成功した candidate の source URL を committed source として次の成功 commit・unmount で置き換え/revoke する。rendered result の URL も次の採用・編集変更・unmount で revoke する。
 - `RasterProcessor.dispose()` は pending work を reject し、Worker reference を terminate する。`clearSource()` は Worker cache を世代境界で無効化する。
 - Worker の Canvas は render request の局所値として保持し、source pixel ArrayBuffer の cache と message transfer の所有を混同しない。download anchor は click 後に DOM から外す。
 

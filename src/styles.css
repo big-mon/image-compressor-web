@@ -745,7 +745,6 @@ input[type="range"] {
 }
 
 .secondary-button,
-.text-button,
 .download-button {
   min-height: 2.75rem;
   border-radius: 0.6rem;
@@ -763,17 +762,6 @@ input[type="range"] {
 .secondary-button.is-selected {
   border-color: #6b988d;
   background: #1d3832;
-}
-
-.text-button {
-  padding: 0.5rem 0.25rem;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-}
-
-.text-button:hover {
-  color: var(--text);
 }
 
 .output-card {
@@ -981,8 +969,8 @@ html:has(.editor-shell), body:has(.editor-shell), #root:has(.editor-shell) { hei
   overflow: hidden;
   background: #101010;
 }
-.image-actions { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: max(0.5rem, env(safe-area-inset-left)); display: flex; gap: 0.5rem; }
-.image-actions button, .image-actions .change-image-button { background-color: var(--panel); }
+.image-actions { position: absolute; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: max(0.5rem, env(safe-area-inset-left)); display: flex; }
+.image-actions .change-image-button { background-color: var(--panel); }
 .zoom-controls { position: fixed; z-index: 30; top: calc(0.5rem + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
 .zoom-controls button { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; padding: 0; border: 0; border-radius: 0.7rem; background: transparent; }
 .zoom-controls button:hover:not(:disabled) { background: var(--panel-raised); }
@@ -1082,8 +1070,7 @@ input[type="range"] { min-height: 2.75rem; }
 input[type="number"], select { background-color: #101010; }
 .secondary-button:hover, .secondary-button.is-selected { background: #302a19; border-color: var(--mint); }
 @media (max-width: 767px) {
-  .image-actions { gap: 0.3rem; }
-  .image-actions button, .image-actions .change-image-button { padding: 0.45rem 0.5rem; font-size: 0.8rem; }
+  .image-actions .change-image-button { padding: 0.45rem 0.5rem; font-size: 0.8rem; }
   .editor-shell .download-button { min-width: 3rem; }
   .editor-shell .download-button span { display: none; }
   .editor-shell .crop-stage-meta { padding-inline: 0.5rem; gap: 0.25rem; }

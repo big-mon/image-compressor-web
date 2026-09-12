@@ -445,22 +445,6 @@ function App() {
     void handleFile(event.dataTransfer.files[0])
   }
 
-  const resetEdits = () => {
-    if (!asset) {
-      return
-    }
-    fileLoadGenerationRef.current += 1
-    setCandidatePending(false)
-    invalidatePreview()
-    try {
-      processorRef.current?.clearSource()
-    } catch (error) {
-      setPreviewPending(false)
-      setProcessingError(getErrorMessage(error, '画像処理をリセットできませんでした。'))
-    }
-    setEditState(createEditState({ width: asset.pixels.width, height: asset.pixels.height }))
-  }
-
   const updateEditState = (update: (current: ImageEditState) => ImageEditState) => {
     invalidatePreview()
     setEditState((current) => current ? update(current) : current)
@@ -889,7 +873,6 @@ function App() {
               >
                 画像を変更
               </label>
-            <button type="button" className="text-button" onClick={resetEdits}>リセット</button>
         </div>}
         {asset && editState && geometry ? <>
           <div className="zoom-controls" role="group" aria-label="表示倍率">
