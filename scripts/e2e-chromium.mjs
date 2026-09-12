@@ -1253,6 +1253,8 @@ async function restoreReadySource(cdp, sessionId, filePath, description, expecte
   const before = await readPr8State(cdp, sessionId)
   await setFileInput(cdp, sessionId, filePath)
   await waitForDom(cdp, sessionId, `document.querySelector('.stage-image')?.src !== ${JSON.stringify(before.sourceUrl)}`, `${description} committed source`)
+  // Keep race fixtures on quick previews; initial automatic full output is tested separately.
+  await setOutputPanel(cdp,sessionId,false)
   const ready = await waitFor(async () => {
     const state = await readPr8State(cdp, sessionId)
     if (
@@ -1972,9 +1974,8 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.editor-column')?.dataset.viewZoom === '1' && document.querySelector('.zoom-controls output')?.textContent === '100%' && document.querySelector('#output-panel')?.hidden === true`, 'initial crop mode at 100 percent')
-  await setOutputPanel(cdp,sessionId,true)
-  await waitForFullOutput(cdp, sessionId)
+  await waitForDom(cdp, sessionId, `document.querySelector('.editor-column')?.dataset.viewZoom === '1' && document.querySelector('.zoom-controls output')?.textContent === '100%' && document.querySelector('#output-panel')?.hidden === false && document.querySelector('[data-mode=compress]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('.stage-area')?.hidden === true && document.querySelector('.comparison-section')?.hidden === false`, 'initial compression mode at 100 percent')
+  await waitForDom(cdp,sessionId,`document.querySelector('.processed-preview')?.dataset.previewKind === 'full' && !document.querySelector('.download-button').disabled`, 'automatic full output without selecting compression')
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
   assert(await evaluate(cdp,sessionId,`document.querySelector('[data-mode=compress]').textContent==='圧縮' && !document.querySelector('#output-panel details,#output-panel summary,.effective-size,.metrics-card,.capacity-bars,#quality-help')`),'Compression menu must show controls without accordion sections.')
   assert(await evaluate(cdp,sessionId,`(()=>{const p=document.querySelector('#output-panel'),f=p.querySelector('#output-format'),l=p.querySelector('label[for="quality"]'),r=p.querySelector('#quality'),w=p.querySelector('#resize-width'),h=p.querySelector('#resize-height');return f&&l&&r&&w&&h&&[f,r,w,h].every(e=>e.checkVisibility())&&f.getBoundingClientRect().bottom<=l.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=w.getBoundingClientRect().top&&r.getBoundingClientRect().bottom<=h.getBoundingClientRect().top&&parseFloat(getComputedStyle(r.parentElement).rowGap)<=3})()`),'Format, quality, width and height must initially be visible in order with a compact label-to-slider gap.')
@@ -2013,7 +2014,9 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   // PNG oracle fixture with asymmetric colored cells (large enough for reduced preview).
   const png = await evaluate(cdp,sessionId,`(() => {const c=document.createElement('canvas');c.width=1000;c.height=600;const x=c.getContext('2d');for(let y=0;y<600;y+=20) for(let z=0;z<1000;z+=20){x.fillStyle='rgb('+((z*7+y)%256)+','+((y*3+z)%256)+','+((z+y*5)%256)+')';x.fillRect(z,y,20,20)}return c.toDataURL().split(',')[1]})()`)
   await writeFile(cropDragFixturePath,Buffer.from(png,'base64'))
+  await setOutputPanel(cdp,sessionId,false)
   await setFileInput(cdp,sessionId,cropDragFixturePath)
+  await waitForDom(cdp,sessionId,`document.querySelector('.stage-image')?.naturalWidth===1000 && document.querySelector('[data-mode=compress]').getAttribute('aria-pressed')==='true' && !document.querySelector('#output-panel').hidden`, 'file selection switches crop to compression')
   await waitForFullOutput(cdp,sessionId)
   await setControlValue(cdp,sessionId,'#output-format','image/png')
   await waitForFullOutput(cdp,sessionId)
@@ -2194,12 +2197,15 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
 
   // Invalid replacements retain the committed image and completed full result.
   for(const invalid of [corruptFixturePath,unsupportedFixturePath]) {
+    await setOutputPanel(cdp,sessionId,false)
     const before=await readPr8State(cdp,sessionId)
     await setFileInput(cdp,sessionId,invalid)
     await waitForDom(cdp,sessionId,`document.querySelector('.error-message') !== null && !document.querySelector('.download-button').disabled`,'invalid replacement settles')
     const after=await readPr8State(cdp,sessionId)
     assert(after.sourceUrl===before.sourceUrl && after.previewUrl===before.previewUrl,'Invalid replacement discarded committed image/result.')
+    assert(await evaluate(cdp,sessionId,`document.querySelector('#output-panel').hidden && !document.querySelector('.stage-area').hidden`),'Invalid replacement must preserve the current mode.')
   }
+  await setOutputPanel(cdp,sessionId,true)
 
   // Hold old preview or full output; a newer intent must win even after release.
   const races=[]
@@ -2250,10 +2256,11 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
 
   // Start with an actual drop while no editor control owns focus.
   await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await clickButton(cdp,sessionId,'傾き・反転')
   await evaluate(cdp,sessionId,`document.activeElement.blur()`)
   await dispatchFileDrop(cdp,sessionId,'.change-image-button',cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
-  assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-surface').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1'`),'New source must start at 100 percent.')
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.comparison-viewport').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1' && document.querySelector('[data-mode=compress]').getAttribute('aria-pressed')==='true' && document.querySelector('.stage-area').hidden`),'Dropped replacement must start in compression at 100 percent.')
   await assertZoomControls(cdp,sessionId)
   // Space drag must work with focus on sibling UI, without editing or activating it on release.
   for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[false,'.zoom-controls button:first-child'],[true,'.zoom-controls button:last-child'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {

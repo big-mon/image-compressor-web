@@ -83,7 +83,7 @@ function App() {
   const [editState, setEditState] = useState<ImageEditState | undefined>()
   const [outputMime, setOutputMime] = useState<OutputMime>('image/jpeg')
   const [quality, setQuality] = useState(0.82)
-  const [editorMode, setEditorMode] = useState<'crop' | 'transform' | 'compress'>('crop')
+  const [editorMode, setEditorMode] = useState<'crop' | 'transform' | 'compress'>('compress')
   const editorView = editorMode === 'compress' ? 'compare' : 'edit'
   const outputOpen = editorMode === 'compress'
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 })
@@ -404,7 +404,7 @@ function App() {
       }
       sourceUrlRef.current = objectUrl
       setAsset({ file, pixels, objectUrl })
-      setEditorMode('crop')
+      setEditorMode('compress')
       setView({ zoom: 1, x: 0, y: 0 })
       setEditState(createEditState({ width: pixels.width, height: pixels.height }))
       setCandidatePending(false)
