@@ -1819,6 +1819,51 @@ async function zoomCanvas(cdp, sessionId, target) {
     await waitForDom(cdp,sessionId,`Math.abs(Number(document.querySelector('.editor-column').dataset.viewZoom)-${current})>0.00001`,'wheel zoom')
     current=await evaluate(cdp,sessionId,`Number(document.querySelector('.editor-column').dataset.viewZoom)`)
   }
+  assert(await evaluate(cdp,sessionId,`document.querySelector('.zoom-controls output').textContent==='${Math.round(target*100)}%'`),'Wheel zoom must update the visible percentage.')
+}
+
+async function assertZoomControls(cdp, sessionId) {
+  await installWorkerProcessGate(cdp,sessionId)
+  for (const [mode, input] of [[0,'mouse'],[1,'keyboard'],[2,'touch']]) {
+    await evaluate(cdp,sessionId,`document.querySelectorAll('.edit-modes button')[${mode}].click()`)
+    await waitForFullOutput(cdp,sessionId)
+    const before=await evaluate(cdp,sessionId,`({crop:document.querySelector('.crop-rectangle').style.cssText,url:document.querySelector('.processed-preview').src,width:document.querySelector('#resize-width').value,height:document.querySelector('#resize-height').value,requests:window.__e2eWorkerProcessGate.requests.length,split:document.querySelector('#comparison-split').value})`)
+    for (const [label, percent] of [['拡大','122%'],['縮小','100%']]) {
+      const selector=`.zoom-controls button[aria-label="${label}"]`
+      const point=await evaluate(cdp,sessionId,`(()=>{const b=document.querySelector('${selector}');b.focus();const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`)
+      if(input==='keyboard') {
+        const key=label==='拡大'?' ':'Enter', code=label==='拡大'?'Space':'Enter', windowsVirtualKeyCode=label==='拡大'?32:13
+        await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode,text:key===' '?' ':'\r',unmodifiedText:key===' '?' ':'\r'},sessionId)
+        await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode},sessionId)
+      } else if(input==='touch') {
+        await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true},sessionId)
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point]},sessionId)
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]},sessionId)
+        await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false},sessionId)
+      } else {
+        await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1},sessionId)
+        await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1},sessionId)
+      }
+      await waitForDom(cdp,sessionId,`document.querySelector('.zoom-controls output').textContent==='${percent}'`,input+' zoom '+label)
+      assert(await evaluate(cdp,sessionId,`(()=>{const r=document.querySelector('${mode===2?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect();return Math.abs(r.width-${percent==='122%'?1221.4:1000})<1 && Math.abs(r.x+r.width/2-innerWidth/2)<1 && Math.abs(r.y+r.height/2-innerHeight/2)<1})()`),'Zoom controls must scale the visible image about the viewport centre.')
+    }
+    await delay(800)
+    assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(before.crop)} && document.querySelector('.processed-preview').src===${JSON.stringify(before.url)} && document.querySelector('#resize-width').value===${JSON.stringify(before.width)} && document.querySelector('#resize-height').value===${JSON.stringify(before.height)} && window.__e2eWorkerProcessGate.requests.length===${before.requests} && document.querySelector('#comparison-split').value===${JSON.stringify(before.split)}`),'Zoom controls changed the edit or triggered encoding.')
+  }
+  await zoomCanvas(cdp,sessionId,15)
+  await clickButton(cdp,sessionId,'拡大')
+  await waitForDom(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom==='16' && document.querySelector('.zoom-controls output').textContent==='1600%' && document.querySelector('.zoom-controls button:last-child').disabled`,'maximum button zoom')
+  for(const viewport of [TABLET_VIEWPORTS[0],{...MOBILE_VIEWPORT,width:320,height:568}]) {
+    for(const open of [false,true]) await assertEditorLayout(cdp,sessionId,viewport,open)
+  }
+  await captureScreenshot(cdp,sessionId,'zoom-controls-maximum-mobile.png')
+  await setViewport(cdp,sessionId,DESKTOP_VIEWPORT)
+  await zoomCanvas(cdp,sessionId,0.011)
+  await clickButton(cdp,sessionId,'縮小')
+  await waitForDom(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom==='0.01' && document.querySelector('.zoom-controls output').textContent==='1%' && document.querySelector('.zoom-controls button:first-child').disabled && !document.querySelector('.zoom-controls button:last-child').disabled`,'minimum button zoom')
+  await clickButton(cdp,sessionId,'拡大')
+  await waitForDom(cdp,sessionId,`!document.querySelector('.zoom-controls button:first-child').disabled`,'zoom away from the minimum')
+  await zoomCanvas(cdp,sessionId,1)
 }
 
 async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
@@ -1826,8 +1871,9 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   await setOutputPanel(cdp, sessionId, panelOpen)
   const layout=await evaluate(cdp,sessionId,`(()=>{
     const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON()
-    const controls=[...document.querySelectorAll('.image-actions button,.change-image-button,.edit-modes button')]
-    return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),
+    const controls=[...document.querySelectorAll('.image-actions button,.change-image-button,.zoom-controls button,.edit-modes button')]
+    return {shell:rect('.editor-shell'),editor:rect('.editor-column'),bottom:rect('.editor-bottom'),actions:rect('.image-actions'),zoom:rect('.zoom-controls'),
+      zoomOrder:[...document.querySelector('.zoom-controls').children].map(e=>e.getAttribute('aria-label')),
       scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
       controls:controls.map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height,hit:b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))}}),
       cropHidden:document.querySelector('.stage-area').hidden,compareHidden:document.querySelector('.comparison-section').hidden,
@@ -1839,6 +1885,7 @@ async function assertEditorLayout(cdp, sessionId, viewport, panelOpen) {
   assert(!layout.obsolete && layout.cropHidden===panelOpen && layout.compareHidden!==panelOpen,'Compression must select comparison without separate modes.')
   assert(Math.abs(layout.bottom.x+layout.bottom.width/2-viewport.width/2)<1 && layout.bottom.y>=0 && layout.bottom.bottom<=viewport.height,'Bottom menu must stay centred and within viewport.')
   assert(layout.controls.every(b=>b.width>=44&&b.height>=44&&b.hit),'Overlay buttons must remain reachable: '+JSON.stringify(layout))
+  assert(layout.zoom.x>=layout.actions.right && layout.zoom.right<=viewport.width && layout.zoom.y>=0 && layout.zoom.bottom<=viewport.height && layout.zoomOrder.join(',')==='縮小,現在の拡大率,拡大','Zoom readout must sit between minus and plus without overlapping image actions: '+JSON.stringify(layout))
   if(!panelOpen) assert(layout.handles.length===4 && layout.handles.every(Boolean),'All four handles must remain reachable: '+JSON.stringify(layout))
   if(panelOpen) {
     for(const selector of ['#output-format','#resize-height','.download-button']) {
@@ -1921,7 +1968,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   }
   await installWorkerProcessGate(cdp, sessionId)
   await dispatchFileDrop(cdp, sessionId, '.drop-zone', fixturePath)
-  await waitForDom(cdp, sessionId, `document.querySelector('.editor-column')?.dataset.viewZoom === '1' && document.querySelector('#output-panel')?.hidden === true`, 'initial crop mode at 100 percent')
+  await waitForDom(cdp, sessionId, `document.querySelector('.editor-column')?.dataset.viewZoom === '1' && document.querySelector('.zoom-controls output')?.textContent === '100%' && document.querySelector('#output-panel')?.hidden === true`, 'initial crop mode at 100 percent')
   await setOutputPanel(cdp,sessionId,true)
   await waitForFullOutput(cdp, sessionId)
   assert(await evaluate(cdp, sessionId, `window.__e2eWorkerProcessGate.requests.some(r => r.preview) && window.__e2eWorkerProcessGate.requests.some(r => !r.preview)`), 'Initially expanded output panel must automatically confirm the full output.')
@@ -2203,12 +2250,13 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   await dispatchFileDrop(cdp,sessionId,'.change-image-button',cropDragFixturePath)
   await waitForFullOutput(cdp,sessionId)
   assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-surface').getBoundingClientRect().width===1000 && document.querySelector('.editor-column').dataset.viewZoom==='1'`),'New source must start at 100 percent.')
+  await assertZoomControls(cdp,sessionId)
   // Space drag must work with focus on sibling UI, without editing or activating it on release.
-  for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
+  for (const [compress,selector] of [[false,null],[true,null],[false,'.edit-modes button'],[false,'.change-image-button'],[false,'.zoom-controls button:first-child'],[true,'.zoom-controls button:last-child'],[true,'[data-mode=compress]'],[true,'#quality'],[true,'#resize-width'],[true,'#output-format']]) {
     await setOutputPanel(cdp,sessionId,compress)
     await evaluate(cdp,sessionId,selector ? `document.querySelector('${selector}').focus()` : `document.activeElement.blur()`)
     if (!selector) assert(await evaluate(cdp,sessionId,`document.activeElement===document.body`),'No-focus case must really target the document body.')
-    const before=await evaluate(cdp,sessionId,`(()=>{const e=document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}');return {x:e.getBoundingClientRect().x,crop:document.querySelector('.crop-rectangle').style.cssText,split:document.querySelector('#comparison-split').value,url:document.querySelector('.processed-preview').src}})()`)
+    const before=await evaluate(cdp,sessionId,`(()=>{const e=document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}');return {x:e.getBoundingClientRect().x,zoom:document.querySelector('.editor-column').dataset.viewZoom,crop:document.querySelector('.crop-rectangle').style.cssText,split:document.querySelector('#comparison-split').value,url:document.querySelector('.processed-preview').src}})()`)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:' ',code:'Space',windowsVirtualKeyCode:32,text:' ',unmodifiedText:' '},sessionId)
     assert(await evaluate(cdp,sessionId,`!document.querySelector('#output-format').matches(':open')`),'Space press opened the format popup before dragging.')
     // Releasing another key must not clear the still-held Space modifier.
@@ -2219,6 +2267,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
     await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:' ',code:'Space',windowsVirtualKeyCode:32},sessionId)
     await waitForDom(cdp,sessionId,`Math.abs(document.querySelector('${compress?'.comparison-viewport':'.crop-surface'}').getBoundingClientRect().x-${before.x}-25)<1`,'Space pan from '+selector)
     assert(await evaluate(cdp,sessionId,`document.querySelector('.crop-rectangle').style.cssText===${JSON.stringify(before.crop)} && document.querySelector('#comparison-split').value===${JSON.stringify(before.split)} && document.querySelector('.processed-preview').src===${JSON.stringify(before.url)} && document.querySelector('#output-panel').hidden===${!compress}`),'Space pan changed the edit, comparison or selected mode: '+selector)
+    assert(await evaluate(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom===${JSON.stringify(before.zoom)}`),'Space pan must not activate a focused zoom button on release.')
   }
   // Losing window focus must end a pan even if pointerup/key up happen after returning.
   await evaluate(cdp,sessionId,`document.activeElement.blur()`)
@@ -2284,7 +2333,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   assert(await evaluate(cdp,sessionId,`window.__e2eImageChangeClicks===1`),'Standalone Space must still open image selection.')
   await clickButton(cdp,sessionId,'クロップ')
   await zoomCanvas(cdp,sessionId,2)
-  await evaluate(cdp,sessionId,`document.querySelector('.image-actions button').focus()`)
+  await evaluate(cdp,sessionId,`document.querySelector('.zoom-controls button:last-child').focus()`)
   await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},sessionId)
   await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9},sessionId)
   assert(await evaluate(cdp,sessionId,`document.querySelector('.stage-area').matches(':focus-visible')`),'Tab must visibly focus the zoom stage.')
@@ -2293,6 +2342,7 @@ async function runScenario({ allowedPaths, basePath, cdp, sessionId, fixturePath
   for(const [key,code,keyCode] of [['+','Equal',187],['-','Minus',189],['0','Digit0',48]]) {
     await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:keyCode},sessionId)
     await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:keyCode},sessionId)
+    assert(await evaluate(cdp,sessionId,`document.querySelector('.zoom-controls output').textContent===Math.round(Number(document.querySelector('.editor-column').dataset.viewZoom)*100)+'%'`),'Keyboard zoom must update the visible percentage.')
   }
   await waitForDom(cdp,sessionId,`document.querySelector('.editor-column').dataset.viewZoom==='1'`,'stage keyboard zoom and reset')
   const outputBeforeZoom=await evaluate(cdp,sessionId,`document.querySelector('.processed-preview').src`)

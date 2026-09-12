@@ -758,7 +758,7 @@ function App() {
     const handles = [...(stage?.querySelectorAll<HTMLButtonElement>('.crop-handle') ?? [])]
     const shell = stage?.closest('.editor-shell')
     if (!stage || !crop || !handles.length || !shell) return
-    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.editor-bottom,.error-message')]
+    const controls = [...shell.querySelectorAll<HTMLElement>('.image-actions,.zoom-controls,.editor-bottom,.error-message')]
     const placeHandle = () => {
       const frame = stage.getBoundingClientRect()
       const bounds = crop.getBoundingClientRect()
@@ -892,6 +892,15 @@ function App() {
             <button type="button" className="text-button" onClick={resetEdits}>リセット</button>
         </div>}
         {asset && editState && geometry ? <>
+          <div className="zoom-controls" role="group" aria-label="表示倍率">
+            <button type="button" aria-label="縮小" title="縮小" disabled={view.zoom <= 0.01} onClick={() => setView(current => zoomView(current, 100, { x: 0, y: 0 }))}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
+            </button>
+            <output aria-label="現在の拡大率">{Math.round(view.zoom * 100)}%</output>
+            <button type="button" aria-label="拡大" title="拡大" disabled={view.zoom >= 16} onClick={() => setView(current => zoomView(current, -100, { x: 0, y: 0 }))}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+            </button>
+          </div>
           <section className="workspace" aria-label="画像エディター" data-quick-width={quickPreviewMetrics?.outputWidth} data-quick-height={quickPreviewMetrics?.outputHeight} data-quick-bytes={quickPreviewMetrics?.outputBytes}>
             <div className="editor-column" ref={editorRef} data-view-zoom={view.zoom}
               onKeyDown={event => {
